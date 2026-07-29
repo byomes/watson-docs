@@ -1,5 +1,5 @@
 # Watson File Map
-*Generated: 2026-07-27*
+*Generated: 2026-07-29*
 *Excludes: logs/, data/chroma/, kb/documents/, kb/transcripts/, .git/, node_modules/, venv/, __pycache__/, .next/, outputs/, .claude/*
 
 ## ~/watson/
@@ -44,6 +44,7 @@ briefing/
 config/
   credentials.json
   settings.py
+  sheets_service_account.json
   sources.yaml
   token.json
 core/
@@ -61,6 +62,7 @@ cron_additions.txt
 cron_backup_20260721_1510.txt
 data/
   .gitkeep
+  .kb_sync.lock
   campaigns/
     WCKY-Book-Launch-Framework.md
     twj/
@@ -160,6 +162,7 @@ jobs/
     send_invite_email.py
     send_manuscript_access_batch.py
     send_signup_confirmation.py
+    send_twj_update.py
     templates/
       arc_invite_email.html
   ask.py
@@ -214,6 +217,8 @@ jobs/
     intake.py
     migrate_prayer_leadership.py
     missed_report.py
+    monthly_engagement_report.py
+    monthly_state_report.py
     pastoral_reports.py
     report_menu.py
     reports.py
@@ -312,6 +317,9 @@ jobs/
     pdf.py
     powerpoint.py
     word.py
+  email_activity/
+    __init__.py
+    api.py
   email_intake.py
   email_job/
     __init__.py
@@ -355,6 +363,9 @@ jobs/
     notify.py
     sync.py
     templates.py
+  gsheets/
+    __init__.py
+    headcount_sync.py
   ingest_drafts.py.retired
   intent/
     __init__.py
@@ -362,6 +373,7 @@ jobs/
     keep_warm.py
   kb/
     __init__.py
+    api.py
     archive_transcripts.py
     sync_and_index.py
   lead_magnet/
@@ -1062,6 +1074,7 @@ memory/
       watson.md
     writing_room.md
   relational.md
+  secrets_audit_draft.md
   skills.json
   skip_keywords.txt
   style_audit_pages.md
@@ -1140,6 +1153,7 @@ content/
     2026-07-21-miraculous-and-providential-the-two-ways-god-moves.md
     2026-07-23-the-stones-we-leave-behind.md
     2026-07-25-covenant-is-not-a-private-matter.md
+    2026-07-28-joshua-s-second-pile.md
     the-flashlight-of-your-focus.md
     where-your-treasure-is.md
 next-env.d.ts
@@ -1187,6 +1201,8 @@ src/
           route.ts
         login/
           route.ts
+      connect-card/
+        route.ts
       ingest/
         route.ts
       lead-magnet/
@@ -1248,6 +1264,7 @@ src/
       ArcSignupForm.tsx
       dashboard/
         ArcDashboard.tsx
+        ArcFeedbackBox.tsx
         CommitmentsPreview.tsx
         ManuscriptReader.tsx
         page.tsx
@@ -1372,6 +1389,11 @@ src/
       opengraph-image.tsx
       page.tsx
       twitter-image.tsx
+    tools/
+      connect-card/
+        ConnectCardForm.tsx
+        layout.tsx
+        page.tsx
     twitter-image.tsx
     twj/
       TWJPressKitClient.tsx
