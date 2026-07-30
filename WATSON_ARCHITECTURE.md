@@ -1,5 +1,5 @@
 # Watson Architecture
-*Single source of truth. Last updated: July 20, 2026.*
+*Single source of truth. Last updated: July 27, 2026.*
 *Claude Code must read this file before any build.*
 
 ---
@@ -422,7 +422,7 @@ but nothing TWJ-specific is hardcoded in the job files themselves.
 - **URL (Tailscale):** `http://100.117.237.96:5200`
 - **URL (public):** `https://watson.tail0243ff.ts.net`
 - **Nav tabs:** Home, Notes, Tasks (in Team), Reminders, Reading, More
-- **More menu sections (current):** Theme toggle, Briefing, Skills (command launcher), Reading List, Ministry, Events, Members, Publishing (Writing Room / ARC), Logins
+- **More menu sections (current):** Theme toggle, Briefing, Skills (command launcher), Reading List, Ministry, Events, Members, Publishing (Writing Room / ARC), Logins, Email Activity (added 2026-07-27 — see Watson Identity & Email)
 - **More menu history:** "Reports" deleted 2026-06-27 (dead code removed, not merged elsewhere — `385b7fc`). "Church Events" renamed to "Events" (same feature, same `church_events` table/`/api/events`). Dev Loop section and Team Admin link removed from nav 2026-07-01, TWJ/ARC consolidation (`b5af9b1`) — UI-only cleanup, backend cron jobs/tables and `/admin` + `/api/dev-loop/*` routes untouched, just no dashboard entry point anymore.
 - **Saved as iPhone PWA** — remove and re-add to Home Screen after safe area CSS changes
 - **Dashboard interfaces:** `/` (Bill), `/admin` (Donna), `/team` (shared team view)
@@ -576,10 +576,17 @@ failure mode reappears.
 
 ## Watson Identity & Email
 
-- **Gmail:** `watson.wcky@gmail.com`
-- **SMTP alias:** `watson@williamckyomes.com` (sends via Gmail SMTP)
-- **From line:** `Watson <watson@williamckyomes.com>` or `FMS Team <watson@faithmakessense.com>`
-- **Signature:** Watson / AI-powered digital assistant / Office of Dr. Bill Yomes
+- **Gmail:** `watson.wcky@gmail.com` (IMAP intake only — see Integrations)
+- **Outbound sender:** `watson@williamckyomes.com` via Brevo (`jobs/email_job/brevo_send.py`) — all 27 migrated call sites, no exceptions. `watson@faithmakessense.com` (display name `FMS Team`) was tried for 4 ARC/Writing Room sites and reverted 2026-07-27: Brevo rejects it as an unauthenticated sender domain, which silently broke ARC resend-welcome for two days before being caught. This is now a **permanent decision, not a stopgap** — do not reintroduce `faithmakessense.com` as a sender without first authenticating that domain in Brevo. See `project_backlog` id=27 for the tracked revert-if-ever-fixed item.
+- **Central signature** (`brevo_send.py` `SIGNATURE_TEXT`/`SIGNATURE_HTML`, auto-appended when `include_signature=True`, the default):
+  ```
+  --
+  Watson
+  Digital Assistant to Dr. Bill Yomes
+  williamckyomes.com/start
+  ```
+  As of 2026-07-27, 7 sites that previously hand-wrote their own sign-off and passed `include_signature=False` (`writing_room/onboard.py`, `remind.py`, `reset.py`, `connect_cards/correction_handler.py`, `dashboard/app.py` ×3, `email_intake.py` ×2, `email_send/send.py`) were consolidated onto this central signature. **12 sites remain intentionally opted out** — each renders a complete `<html>...</html>` document as `html_body`, and `send_email()`'s signature append is a raw string concatenation (`html_body + SIGNATURE_HTML`) that would land the signature *after* the closing `</html>` tag if forced through, on top of already hand-writing the identical sign-off inside their own footer: `arc/send_invite_email.py`, `arc/send_signup_confirmation.py`, `writing_room/send_arc_welcome_email.py`, `connect_cards/email_reports.py` + `monthly_engagement_report.py` + `monthly_state_report.py` + `shepherding_report.py` (all four via `reports.py`'s shared `_wrap()`), `connect_cards/state_of_church.py`, `lead_magnet/send_confirmation.py`, `meet/templates/elder_review.py` (used by `fireflies_review.py`), `team/note_task_scan.py`, `team/weekly_completed_report.py`.
+- **Email Activity tile** (`jobs/email_activity/api.py`, More tab): read-only viewer over Brevo's `GET /v3/smtp/statistics/events` — built after the sender/signature bugs above went undetected for days with no visibility short of journalctl. Admin-session gated, same pattern as `jobs/links/api.py`. Does not touch the send path.
 
 ---
 
@@ -1411,5 +1418,91 @@ Bugs surfaced in Claude.ai conversation history predating the `bug_tracker` tabl
 ## Recent Changes — 2026-07-27
 
 ### ~/watson
+- 38a8596 fix: weekly_completed_report.py footer matches majority sign-off convention
+- 3e18392 docs: clarify williamckyomes.com sender is permanent, not a stopgap
+- 1861b1d fix: remove failure-count badge from Email Activity tile
+- c703242 feat: Email Activity tile — Brevo send log viewer (More tab)
+- 0f14f7f refactor: consolidate email sign-off to central Brevo signature (7 sites)
+- c0936ac fix: stopgap - force williamckyomes.com Brevo sender across ARC/Writing Room emails
 - 17a728a docs: file map 2026-07-26
 - 6404b86 docs: bugs/backlog export 2026-07-26
+
+---
+
+## Recent Changes — 2026-07-28
+
+### ~/watson
+- ea8a616 feat: ARC feedback box backend — 600-char cap + Brevo notify to Bill
+- 370aa3e docs: architecture update — Brevo sender/signature consolidation, Email Activity tile
+- 38a8596 fix: weekly_completed_report.py footer matches majority sign-off convention
+- 3e18392 docs: clarify williamckyomes.com sender is permanent, not a stopgap
+- 1861b1d fix: remove failure-count badge from Email Activity tile
+- c703242 feat: Email Activity tile — Brevo send log viewer (More tab)
+- 0f14f7f refactor: consolidate email sign-off to central Brevo signature (7 sites)
+- c0936ac fix: stopgap - force williamckyomes.com Brevo sender across ARC/Writing Room emails
+- fb71e28 Send monthly_state_report.py to Bill, Bill Crook, and Jim Bouchat
+- 3478211 Fix stale cron docstring in monthly_state_report.py
+- c912ea2 Merge remote-tracking branch 'origin/main' into main
+- 57f38a9 Rewrite monthly_state_report.py as person-focused engagement report (v2)
+- 51ced82 Add monthly quantitative State of the Church report
+- 257ce34 Add --to override flag to monthly_engagement_report.py
+- c4b7077 Add monthly connect card engagement report for Kaci
+- 584d3ef transcript: add 2026-07-27-Joshua-Ch7-QA
+- a4fde3e transcript: add 2026-07-27-Joshua---Ch7---Disobedient-in-Inheritence
+- 5b9290c fix: skip Watson's own Connect Card Bcc copy in email_intake triage (issue a)
+- cb1399e fix: email_intake.py silently drops HTML-only email bodies (issue b)
+- 132502f docs: bugs/backlog export 2026-07-27
+- 68a3dd9 fix: Brevo rejects empty-string to_name as missing name parameter
+- d919e06 docs: file map 2026-07-27
+- b74d221 docs: bugs/backlog export 2026-07-27
+- ae713d0 docs: architecture update 2026-07-27
+
+### ~/wcky
+- 400ff4c feat: ARC dashboard feedback box — reader quotes for launch marketing
+- 85b5fe0 feat: redirect to Subsplash access page after connect-card submit
+- 33c3746 fix: mobile zoom-on-focus on /tools/connect-card form fields
+- 5b03c7a fix: phone autofill country-code handling on /tools/connect-card
+- fd51dfb Revert "style: add Catalyst logo to connect-card heading, sized to cap-height"
+- d1bb9b5 style: add Catalyst logo to connect-card heading, sized to cap-height
+- 7f7037f style: double horizontal page margin on /tools/connect-card
+- caa283e style: visual-parity pass on /tools/connect-card matching original Subsplash form
+- e114a56 fix: match Connect Card email body to existing inbox format
+- 8f9fdec feat: self-hosted Connect Card at /tools/connect-card
+
+---
+
+## Recent Changes — 2026-07-29
+
+### ~/watson
+- b3f14d8 feat: wire book_launch_sends.image_path into facebook_queue dispatch
+- 2fe0731 feat: add ARC TWJ update email script
+- 97c1027 chore: remove test file used to verify /api/kb/sync-now route (bug #51 follow-up)
+- f0ce28f kb: sync 1 transcript(s) to kb/documents (same-day)
+- 0a973b8 fix: generate.py transfers transcripts to Beelink via scp instead of git push
+- aac666b chore: remove test file used to verify sync_and_index.py pipeline (bug #51 follow-up)
+- 4e1716b kb: sync 1 transcript(s) to kb/documents (same-day)
+- 1f75e55 docs: bugs/backlog export 2026-07-28
+- d790901 docs: file map 2026-07-28
+- fead7df docs: architecture update 2026-07-28
+
+### ~/wcky
+- 643b061 Encourage multiple comments in ARC feedback prompt
+- 57737f8 publish: Joshua's Second Pile
+
+---
+
+## Recent Changes — 2026-07-30
+
+### ~/watson
+- 44c3024 fix: generate dashboard directive dropdown from directive_prefixes.py
+- ad78f46 kb: generate commands.json and Telegram /help from the directive registry
+- fb86d54 kb: extend directive registry with menu metadata + fix dispatch gaps found auditing it
+- 9b97e06 kb: add xkb: directive for immediate expanded search
+- 5103453 kb: wire "expanded search" as a follow-up on Telegram and dashboard
+- 326adec kb: default search to transcripts only, add expanded search escape hatch
+- ff2facc kb: tag source_type on ingest + backfill existing sermons chunks
+- 7e442c1 kb: refactor sync_and_index into run_sync() with cross-process file lock
+- a62b005 kb: remove duplicate Joshua Ch1 transcript
+- df0ebc8 docs: file map 2026-07-29
+- 21c4041 docs: bugs/backlog export 2026-07-29
+- 76875ce docs: architecture update 2026-07-29
