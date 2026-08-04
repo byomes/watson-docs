@@ -1,5 +1,5 @@
 # Watson Architecture
-*Single source of truth. Last updated: July 27, 2026.*
+*Single source of truth. Last updated: August 1, 2026.*
 *Claude Code must read this file before any build.*
 
 ---
@@ -122,7 +122,7 @@ Watson acts on Dr. Bill's behalf under his supervision. Always identified openly
 | `watson.tail0243ff.ts.net` | — | Watson dashboard (public via Funnel) |
 | `watson-admin.vercel.app` | `byomes/watson-admin` | Book/reader management admin |
 | `faithmakessense.com` | `byomes/fms` (planned) | FMS ministry site — rebuild pending |
-| `adelphosacademy.com` | — | Moodle 5.0 theology school |
+| `www.adelphosonline.com` | — | Moodle 5.0 theology school (`adelphosacademy.com` is a stale/wrong domain — do not build against it) |
 | `bodyrec.vercel.app` | `byomes/bodyrec` | Body composition tracker (bill/mel profiles), backed by Watson API |
 
 ---
@@ -147,6 +147,7 @@ Watson acts on Dr. Bill's behalf under his supervision. Always identified openly
 - `twj_readers`, `twj_feedback` — legacy TWJ reader accounts/feedback, migrated from Upstash KV; dashboard UI tab retired, data and routes intact
 - `login_challenges` — login vault challenge/response pairs (dashboard-only)
 - `dev_projects` — Dev Loop project tracking
+- `claude_code_jobs` — MCP Claude Code dispatcher job tracking (in progress)
 - `memory_sessions` — persistent chat memory, injected into Ollama system prompt
 - `routing_corrections` — intent correction log; memory note prepended after 5+ in 30 days
 - `team_tasks`, `shared_notes`, `team_members` — leadership team management
@@ -330,6 +331,138 @@ Dashboard trigger available: "Run Conflict Check" in More tab.
 - Cleanup: `jobs/dev_loop/cleanup.py` — Monday 4am, purges projects older than 7 days
 - Stuck-running handling (`jobs/dev_loop/cleanup.py`): `auto_fail_stuck_running()` runs before the 7-day purge — checks `ps -eo args` for a live `loop.py --slug <slug>` process, and any `dev_projects` row still `'running'` past 2h with no matching process is auto-marked `'failed'` and reported via Telegram. Complements the pre-existing `flag_stuck_running()`, which is read-only and alerts at a 24h threshold without changing status.
 - Projects staged to `~/watson/dev/<slug>/` — never auto-committed to main
+
+---
+
+## MCP Claude Code Dispatcher
+
+Lets Claude.ai dispatch a real Claude Code CLI build job directly from a
+voice/chat conversation via two MCP tools (`dispatch_claude_code_job`,
+`check_claude_code_job`) — no manual copy/paste between Claude.ai and the
+Beelink terminal. Spec: `~/watson/MCP-Claude-Code-Dispatcher-Spec.md`.
+
+**Status: fully wired, tested end-to-end, and live** — the Claude.ai
+connector successfully authorized and connected as of 2026-08-04.
+
+- **Endpoint:** `POST/GET/HEAD /mcp/devdispatch` — Flask blueprint
+  (`jobs/devdispatch/api.py`) on `watson-dashboard.service`, reachable via
+  the existing Tailscale Funnel. Minimal MCP JSON-RPC surface
+  (`initialize`, `tools/list`, `tools/call`) so it registers as a Claude.ai
+  custom connector — not a REST API in the Writing Room/bodyrec shape,
+  since a custom connector needs actual MCP protocol. GET/HEAD are
+  reachability-probe-only (return a minimal `{"ok": true}` once
+  authenticated); real JSON-RPC traffic is POST-only. The auth gate (see
+  below) applies to all three methods identically — OPTIONS is the one
+  exception, handled unauthenticated by Flask's automatic CORS-preflight
+  response.
+- **Auth:** two independent paths, either satisfies it — `X-Watson-Key`
+  header against `MCP_DISPATCH_API_KEY` (same shared-secret pattern as
+  Writing Room/bodyrec), or `Authorization: Bearer <token>` issued by the
+  OAuth shim below. An unauthenticated request on any method gets `401`
+  with a `WWW-Authenticate` header pointing at the protected-resource
+  metadata, required for MCP client discovery.
+- **Tools:** `dispatch_claude_code_job` (spec, repo, optional branch_name —
+  repo must be one of `watson/wcky/watson-admin/watson-ui/fms/bodyrec`;
+  branch_name may never be `main`/`master`) and `check_claude_code_job`
+  (job_id).
+- **Table:** `claude_code_jobs` (`watson.db`) — `id, spec_text, repo, branch,
+  status [queued|running|done|failed|expired], pr_url, log_path, summary,
+  cli_session_id, created_at, updated_at`.
+
+### CLI invocation (the real shape, not the originally-guessed one)
+
+`claude --bg` rejects `-p`/`--print` and `--output-format` outright (they're
+mutually exclusive with `--bg`), so there's no JSON-mode return value — the
+session id is scraped from the CLI's `backgrounded · <id>` stdout line.
+Actual launch, from `~/<repo>`:
+
+```
+claude --bg -w <branch_name> --permission-mode bypassPermissions --max-budget-usd 5 "<spec_text>"
+```
+
+`-w <name>` creates the worktree at a predictable path,
+`<repo_root>/.claude/worktrees/<name>`, but the git branch Claude Code
+actually creates is `worktree-<name>` (prefixed) — not `<name>` verbatim.
+Claude Code does **not** reliably auto-commit: under `bypassPermissions`
+with no instruction against it, a dispatched session sometimes commits its
+own work unprompted, and sometimes doesn't. Because of that,
+`check_claude_code_job` never trusts `git status` alone to decide whether
+anything happened once a session reports `state: done` — it checks `git
+rev-list --count main..HEAD` first (commits ahead of main), commits any
+still-uncommitted worktree changes itself if that's zero-but-status-is-
+dirty, then re-checks ahead-count before deciding "no changes produced."
+Once there's something to ship: pushes `worktree-<branch_name>`, opens the
+PR via `GITHUB_TOKEN`, sends a Telegram summary, and tears the background
+session down with `claude rm` (which itself refuses to run until the
+worktree is clean — commit/push always happens first).
+
+**PR-only completion, confirmed decision** — no auto-restart, no
+auto-deploy, ever. Bill merges/pulls/restarts manually, same as every other
+Watson build.
+
+### OAuth 2.1 layer
+
+Claude.ai's custom-connector UI only supports an interactive
+`authorization_code` + mandatory S256 PKCE flow — confirmed it does **not**
+support `client_credentials`, so a bare token-exchange endpoint would have
+been unreachable from that UI. Single-user (Bill only): `GET
+.../oauth/authorize` auto-approves with no login/consent screen, but still
+strictly rejects any `client_id`/`redirect_uri` that isn't an exact match
+(no redirect on mismatch — open-redirect risk otherwise) and requires PKCE.
+No dynamic client registration — Bill pasted a fixed
+`MCP_OAUTH_CLIENT_ID`/`MCP_OAUTH_CLIENT_SECRET` into the connector's
+Advanced settings instead (the MCP spec's documented alternative to DCR).
+Access tokens are opaque 90-day tokens in `devdispatch_oauth_tokens`, not
+signed JWTs, no refresh grant — a deliberate simplicity tradeoff justified
+by single-user/no one to leak a token to.
+
+Real endpoints: `GET /mcp/devdispatch/.well-known/oauth-protected-resource`,
+`GET /mcp/devdispatch/.well-known/oauth-authorization-server`,
+`GET /mcp/devdispatch/oauth/authorize`, `POST /mcp/devdispatch/oauth/token`.
+
+**Root-level `GET /authorize` and `POST /token` also exist** — thin
+redirect/proxy shims only, no duplicated logic (`/authorize` 302s to the
+real `/mcp/devdispatch/oauth/authorize` with every query param forwarded
+unchanged; `/token` calls the real `oauth_token()` handler directly and
+returns its response verbatim). These work around a **confirmed Claude.ai
+connector bug** (anthropics/claude-ai-mcp issues **#82, #283, #644**): the
+client ignores `authorization_endpoint`/`token_endpoint` in the AS metadata
+entirely and hardcodes `{origin}/authorize` and `{origin}/token` at the
+bare domain root, regardless of what the metadata actually declares — not
+a bug in Watson's metadata, which was already correct. The
+`.well-known/oauth-*` discovery documents are similarly mirrored at the
+domain root (same content, same real endpoint values) for the same reason
+— Claude.ai's client appears to treat the plain origin as the issuer for
+discovery purposes too.
+
+Connector successfully authorized end-to-end against the real Claude.ai
+client as of 2026-08-04, using this full root-proxy + OAuth stack.
+
+### Known gaps
+
+- `check_claude_code_job` has no separate poller — a job that's never
+  checked sits at `running` indefinitely with its background session
+  idling until someone asks.
+- No structured log-tail: `claude logs <id>` returns a raw ANSI/TUI
+  terminal transcript, not parseable text, so it isn't used —
+  `check_claude_code_job` reports running/done/failed with no output
+  preview.
+- The `failed` `claude agents` state string has never actually been
+  observed (only `working`/`done`) — handling is best-effort, surfaced as
+  `unrecognized claude agents state: <value>` rather than assumed.
+- `claude --bg --help` gotcha — see Development Conventions below; bit
+  this build once already.
+
+### Superseded prior art
+
+`jobs/code_agent/` (email+CONFIRM spec pipeline) and `jobs/dev/code_agent.py`
+were audited and discarded, not extended — both dead (zero successful runs
+since 2026-06-05, entry points unreachable). `watson-codeagent.service`
+(the systemd unit running `jobs/code_agent/confirm.py`) is still live and
+enabled but has been failing every 60s on a Gmail 403/insufficient-scope
+error since inception; disabling it needs a sudo grant beyond the current
+restart-only scope (see Development Conventions), so it's flagged in
+`bug_tracker` (#55) rather than acted on directly.
 
 ---
 
@@ -670,11 +803,23 @@ Wired into both `bot.py` and `jobs/dev_loop/loop.py`.
 
 ## Adelphos Academy
 
-- **URL:** `adelphosacademy.com`
+- **URL:** `www.adelphosonline.com` (`adelphosacademy.com` is stale/wrong — returns HTTP 465, do not use)
 - **Platform:** Moodle 5.0
-- **Moodle REST API:** Confirmed enabled
-- **Planned Watson jobs:** Lesson builder, quiz generator, course spec system, weekly monitoring digest, student stuck alert, course announcement emails, student welcome message
-- **Status:** In build queue — not yet started
+- **Moodle REST API:** `jobs/adelphos/client.py`, token in `.env` as `ADELPHOS_MOODLE_TOKEN`, scoped to a
+  dedicated `watson_users` Moodle service/role (not the site-admin account)
+- **New Account Security Monitor (Priority 1) — SHIPPED 2026-08-01:** Built ahead of the course-dev
+  jobs below in response to active fraudulent-signup abuse starting 2026-07-31.
+  `jobs/adelphos/security_monitor.py` polls `core_user_get_users` every 5 minutes (cron installed
+  2026-08-01) and alerts Bill via Telegram with Delete/Allow buttons. Delete is a two-tap confirm flow
+  (`jobs/adelphos/actions.py` + `bot/bot.py`'s `handle_adelphos_callback`) that fires
+  `core_user_delete_users` — **true deletion, not suspend**, per Bill's explicit decision. Allow just
+  resolves the alert with no Moodle call. A first-run watermark-seeding fix avoids re-alerting on
+  every pre-existing account when the `adelphos_new_accounts` table is empty. Full live end-to-end
+  test passed 2026-08-01 (real throwaway account created, alerted, deleted via two real Telegram taps,
+  confirmed gone from Moodle).
+- **Remaining course-development jobs (Priority 2, deferred, not started):** Lesson builder, quiz
+  generator, course spec system, weekly monitoring digest, student stuck alert, course announcement
+  emails, student welcome message.
 
 ---
 
@@ -693,6 +838,9 @@ WRITING_ROOM_ADMIN_PASS=
 WRITING_ROOM_SESSION_SECRET=
 WRITING_ROOM_EMAIL_FROM=Watson <watson@williamckyomes.com>
 WATSON_API_URL=https://watson.tail0243ff.ts.net
+MCP_DISPATCH_API_KEY=
+MCP_OAUTH_CLIENT_ID=
+MCP_OAUTH_CLIENT_SECRET=
 ```
 
 ---
@@ -701,6 +849,7 @@ WATSON_API_URL=https://watson.tail0243ff.ts.net
 
 - **Design:** Claude.ai (this interface)
 - **Build:** Claude Code on Beelink (`--dangerously-skip-permissions`)
+- **`claude --bg --help` gotcha:** `--bg` is not suppressed by `--help` — combining them still launches a real background session (confirmed 2026-08-04 during the MCP dispatcher build). Never combine `--bg` with `--help` when just checking CLI docs; check flags via plain `claude --help`/`claude agents --help` instead.
 - **Deploy:** Claude Code commits + pushes → Vercel auto-deploys / Bill manually pulls Watson
 - **Claude Code never SSHes.** Bill always pulls and restarts services manually.
 - **Sudo access:** Claude Code has exactly one passwordless sudo permission — restarting
@@ -797,7 +946,7 @@ Bugs surfaced in Claude.ai conversation history predating the `bug_tracker` tabl
 13. Book development job — `jobs/book/research_brief.py`
 14. Transcription backlog — 10 years of sermon audio on FMSPC
 15. Weekly email end-to-end test
-16. Adelphos Academy Watson integration (8 planned jobs)
+16. Adelphos Academy course-development jobs (7 remaining, Priority 2) — Security Monitor shipped 2026-08-01, see "Adelphos Academy" section
 17. Watson self-improvement system — architecture approved, build deferred
 
 ---
@@ -1513,3 +1662,65 @@ Bugs surfaced in Claude.ai conversation history predating the `bug_tracker` tabl
 
 ### ~/watson
 - 50903b9 fix: exclude Bill's own addresses from Email Activity tile
+
+---
+
+## Recent Changes — 2026-08-02
+
+### ~/watson
+- a1e7c4d Wire narrow/render split and preview title fields into dashboard
+- 5c23304 Split font suggestion narrow/render, fix preview text overflow
+- ee0df4c Wire Standalone-first flow and Suggest Fonts into dashboard/bot
+- 36b95b9 Add Suggest Fonts job to Cover Comp Idea Generator (font_finder.py)
+- 997597f Wire Cover Comp Idea Generator into dashboard and Telegram bot
+- 5498536 Add Cover Comp Idea Generator job (jobs/book/)
+- bd7484e docs: mark Adelphos Security Monitor shipped, fix stale domain
+- 1fe1f6e docs: bugs/backlog export 2026-08-01
+- 24dfb69 fix: seed watermark on first Adelphos monitor run instead of alerting
+- f7806b3 feat: Adelphos Academy New Account Security Monitor (Priority 1)
+- 8be3543 docs: file map 2026-08-01
+- 38aebec docs: bugs/backlog export 2026-08-01
+- 8171539 docs: architecture update 2026-08-01
+
+---
+
+## Recent Changes — 2026-08-03
+
+### ~/watson
+- 5b2e9ca chore: remove Cover Comps tile from dashboard More menu
+- c1d5bcc fix: bump cover_comps Ollama read timeout from 120s to 400s
+- cb4617c fix: correction_handler.py mis-parsed Gmail's collapsed quote-preview card as reply content
+- fb2679f fix: connect_cards/intake.py never matched the new self-hosted Connect Card form
+- 749af43 feat: remove font-pairing gate, add inline preview/approve dashboard UI
+- b81f7dd fix: font-pairing checkboxes disconnected from labels in New Series form
+- 30161e4 fix: bump Suggest Fonts Ollama timeout from 120s to 400s
+- a997fab docs: bugs/backlog export 2026-08-02
+- 31550e6 docs: file map 2026-08-02
+- da9411a docs: architecture update 2026-08-02
+
+---
+
+## Recent Changes — 2026-08-04
+
+### ~/watson
+- 901877f docs: bugs/backlog export 2026-08-04
+- 62bb231 docs: file map 2026-08-04
+- 5b9b7fa docs: close out MCP Claude Code dispatcher build — live and complete
+- 0f14631 fix: root-level /authorize and /token proxies (Claude.ai connector bug workaround)
+- 529f8b9 fix: method-agnostic auth gate on /mcp/devdispatch (GET/HEAD were bare 405)
+- 3d503e8 fix: mirror OAuth discovery metadata at domain root for devdispatch
+- 0bad30c feat: OAuth 2.1 authorization_code + PKCE shim for /mcp/devdispatch
+- 1e59da2 feat: MCP Claude Code dispatcher (/mcp/devdispatch) — dispatch + check tools
+- 4510a92 fix: GITHUB_RAW_BASE pointed at kb/transcripts, should be kb/documents
+- 5f0828d fix: log rejection reason on /api/kb/sync-now 401 (missing config vs no header vs mismatch)
+- fbfb5df kb: sync 2 transcript(s) to kb/documents (same-day)
+- cd29741 fix: stagger 2am doc/KB cron jobs to stop git commit/push collisions
+- e2a3daf feat: ship KB immediate-sync trigger + harden pipeline against missing kb/transcripts/
+- 4f00384 chore: remove test file used to verify sync_and_index.py self-heal fix (bug #51 follow-up)
+- ed561b0 kb: sync 1 transcript(s) to kb/documents (same-day)
+- 4aca671 adelphos: show placeholder text for missing email/IP in signup alerts
+
+### ~/wcky
+- de9da00 Add guide cover image to download page
+- 9d68b2d Add auto-download page for Study Like a Pastor guide
+- bddca70 Add Study Like a Pastor PDF guide asset
