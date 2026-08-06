@@ -1,5 +1,5 @@
 # Watson Architecture
-*Single source of truth. Last updated: August 1, 2026.*
+*Single source of truth. Last updated: August 5, 2026.*
 *Claude Code must read this file before any build.*
 
 ---
@@ -31,6 +31,9 @@ Watson acts on Dr. Bill's behalf under his supervision. Always identified openly
 - **Tailscale Funnel:** `https://watson.tail0243ff.ts.net` → publicly reachable → proxies to `http://localhost:5200`
 - **Dashboard:** Flask app, port 5200, `watson-dashboard.service`
 - **Ollama:** Bound to `0.0.0.0`. Models: `llama3.2:3b` (primary chat/intent), `qwen2.5-coder:7b` (Dev Loop, KB, structured reasoning), `qwen2.5:7b` (accuracy-sensitive background jobs — pastoral notes, email drafts, task/goal extraction, State of Church synthesis, skill/capability audits), `phi3:mini` (background tasks), `gemma3:1b` (fast/lightweight)
+- **External storage:**
+  - `/mnt/external` — USB SSD, holds `OLLAMA_MODELS`. Existing, untouched by the backup build below.
+  - `/mnt/family-storage` — USB 2TB HDD (ext4, `sda1`), already mounted; added to Watson's use 2026-08-05. **Dual-purpose**: also serves as family NAS storage, not dedicated to Watson. Same power bar as the Beelink itself, so Watson's use of it is a **local/fast recovery tier, not an offsite/disaster-recovery leg** — a power event takes out both together. Watson's own data (backups for now, possibly other things later) is isolated under `/mnt/family-storage/watson/`, `chmod 700` and owned by `billyomes` only, so the family NAS side can't read or write into it regardless of how the share is configured. `jobs/backup_local.py` (restic, 2:30am) backs up to a repo at `/mnt/family-storage/watson/restic-repo`. OneDrive (`jobs/backup.py`, 3am) remains the actual offsite disaster leg, unchanged in scope/purpose — the two legs run independently, both full scope, neither chained off the other. One-time subfolder-creation/restic-init steps are manual (`docs/BACKUP_SETUP.md`), not automated by Claude Code.
 
 ### FMSPC — Windows Desktop (GPU Tasks Only)
 
@@ -219,7 +222,7 @@ note for why that change isn't sufficient on its own to bring it back.
 | Bible API | Scripture lookup | `api.scripture.api.bible` — NIV, CSB, NASB |
 | Serper.dev | Web search | Used in KB and research jobs |
 | Scribbl | Meet transcripts | Chrome extension → auto-emails transcript to `watson.wcky@gmail.com` post-call |
-| OneDrive | Nightly backup | rclone `Watson-Backup` remote, 3am cron — backs up data/, config/, kb/chroma/, kb/documents/, .env |
+| OneDrive | Nightly backup (offsite disaster leg) | rclone `Watson-Backup` remote, 3am cron — backs up data/ (the four core DBs snapshotted via `sqlite3 .backup`, not copied live), config/, `data/chroma/` (the live vector index — corrected 2026-08-05 from the orphaned `kb/chroma/`, remote path `chroma-live`), kb/documents/, .env |
 | FlareSolverr | Cloudflare JS challenge bypass | `localhost:8191`, persistent Docker container (`docker run -d --name=flaresolverr --restart unless-stopped`, not systemd). Used by `jobs/curator/research.py` for romance.io only (`_FLARESOLVERR_DOMAINS`) — resolves project_backlog id=18. `jobs/research/gutenberg.py` does NOT route through it — its `search()` already works via a self-hosted local Gutendex instance (`gutendex.service`, `127.0.0.1:8010`, since 2026-07-15) and `download_and_ingest()` downloads text directly from gutenberg.org; neither hits the Cloudflare-blocked public gutendex.com. That self-hosted catalog has its own staleness gap (no refresh job — see project_backlog, new item added 2026-07-22) unrelated to Cloudflare. |
 
 ---
@@ -265,7 +268,8 @@ note for why that change isn't sufficient on its own to bring it back.
 | `jobs/team/reminders.py --overdue` | Mon–Thu 10am | Overdue task reminders |
 | `jobs/team/reminders.py --unanswered` | Mon–Thu 10am | Unanswered comms reminders |
 | `jobs/team/note_task_scan.py` | Tue/Wed/Thu 7am | Extract tasks from shared notes → Donna approval email |
-| `jobs/backup.py` | Daily 3am | OneDrive backup via rclone |
+| `jobs/backup.py` | Daily 3am | OneDrive backup via rclone (offsite disaster leg) |
+| `jobs/backup_local.py` | Daily 2:30am | Local restic backup to `/mnt/family-storage/watson/` (fast/versioned recovery leg, independent of OneDrive — see Hardware) |
 | `jobs/dev_loop/cleanup.py` | Mon 4am | Purge Dev Loop projects older than 7 days |
 | `jobs/dev/file_map.py` | Daily 2am | Auto-update FILE_MAP.md |
 | `jobs/dev/bugs_backlog_sync.py` | Daily 2am | Regenerate BUGS.md / DEV_PROJECTS.md from bug_tracker / project_backlog, push to byomes/watson-docs |
@@ -337,9 +341,10 @@ Dashboard trigger available: "Run Conflict Check" in More tab.
 ## MCP Claude Code Dispatcher
 
 Lets Claude.ai dispatch a real Claude Code CLI build job directly from a
-voice/chat conversation via two MCP tools (`dispatch_claude_code_job`,
-`check_claude_code_job`) — no manual copy/paste between Claude.ai and the
-Beelink terminal. Spec: `~/watson/MCP-Claude-Code-Dispatcher-Spec.md`.
+voice/chat conversation via three MCP tools (`dispatch_claude_code_job`,
+`check_claude_code_job`, `merge_claude_code_job`) — no manual copy/paste
+between Claude.ai and the Beelink terminal. Spec:
+`~/watson/MCP-Claude-Code-Dispatcher-Spec.md`.
 
 **Status: fully wired, tested end-to-end, and live** — the Claude.ai
 connector successfully authorized and connected as of 2026-08-04.
@@ -363,11 +368,12 @@ connector successfully authorized and connected as of 2026-08-04.
   metadata, required for MCP client discovery.
 - **Tools:** `dispatch_claude_code_job` (spec, repo, optional branch_name —
   repo must be one of `watson/wcky/watson-admin/watson-ui/fms/bodyrec`;
-  branch_name may never be `main`/`master`) and `check_claude_code_job`
-  (job_id).
+  branch_name may never be `main`/`master`), `check_claude_code_job`
+  (job_id), and `merge_claude_code_job` (job_id — added 2026-08-06, see
+  below).
 - **Table:** `claude_code_jobs` (`watson.db`) — `id, spec_text, repo, branch,
   status [queued|running|done|failed|expired], pr_url, log_path, summary,
-  cli_session_id, created_at, updated_at`.
+  cli_session_id, last_progress_step, merged_at, created_at, updated_at`.
 
 ### CLI invocation (the real shape, not the originally-guessed one)
 
@@ -398,7 +404,24 @@ worktree is clean — commit/push always happens first).
 
 **PR-only completion, confirmed decision** — no auto-restart, no
 auto-deploy, ever. Bill merges/pulls/restarts manually, same as every other
-Watson build.
+Watson build. **Merge step superseded 2026-08-06** — see `merge_claude_code_job`
+below; the "pulls/restarts manually" half is unchanged.
+
+**`merge_claude_code_job` (added 2026-08-06):** lets Bill approve and merge
+a dispatched job's PR from the chat itself instead of opening GitHub — the
+human-review gate is unchanged, just expressed in chat rather than GitHub's
+UI. Only ever invoked on an explicit, per-job approval in that conversation
+turn — never automatically on job completion, proactively, or batched.
+Before merging (`pr.merge(merge_method="squash")` via PyGithub), it
+verifies: PR still `open` (reconciling `merged_at` instead of erroring if
+GitHub already shows it merged), `pr.mergeable` is `True` (not `None` —
+still computing — or `False` — conflict), and the head commit's combined
+status + check-runs have no failing/red entries (pending is fine). Merge
+state is tracked via a new nullable `merged_at` column on `claude_code_jobs`
+— `status` stays `done`, no change to the CHECK constraint. Calling it twice
+on an already-merged job is idempotent (`{"status": "already_merged", ...}`).
+`dispatch_claude_code_job`'s own completion path is untouched — it still
+only opens the PR and stops.
 
 ### OAuth 2.1 layer
 
@@ -452,6 +475,38 @@ client as of 2026-08-04, using this full root-proxy + OAuth stack.
   `unrecognized claude agents state: <value>` rather than assumed.
 - `claude --bg --help` gotcha — see Development Conventions below; bit
   this build once already.
+- **No `tools.listChanged` capability** — `initialize` deliberately does
+  *not* advertise `capabilities.tools.listChanged`, and there is no
+  `notifications/tools/list_changed` push. `/mcp/devdispatch` is stateless
+  HTTP POST/response per call (see endpoint description above) — no
+  SSE/streaming, no persistent per-client session — so the server has no
+  channel to push an unsolicited notification over. Declaring the
+  capability without real delivery would violate the MCP contract, so it's
+  left off rather than declared dishonestly. **Practical consequence:**
+  after any change to `_TOOLS` in `jobs/devdispatch/api.py` (tool
+  added/removed/schema changed) and deploy, the Claude.ai connector must be
+  manually disconnected and reconnected (connector settings) to pick up
+  the new tool list — it has no way to learn about the change otherwise.
+  If this endpoint ever grows a real persistent connection (e.g. an SSE
+  transport), add the notification send and the `listChanged: true` flag
+  together, never one without the other.
+- **Fixed 2026-08-06 — duplicate-PR 422 misreported real work as failed**
+  (bug_tracker #59). A dispatched Claude Code session commonly opens its own
+  PR on completion (its normal end-of-task convention, independent of
+  Watson's own flow); `_finalize_completed_job()` then also calls
+  `_open_pr()` once `claude agents` reports `state: done`, colliding with
+  the session's own PR and getting a 422 from GitHub, previously treated as
+  a hard failure. This hit 9 consecutive jobs in a row (ids 16–24, spanning
+  2026-08-06 02:00–04:20) before being root-caused — real, valid PRs (the
+  dispatched session's own) sat open and untracked while their jobs showed
+  `failed`. **Fix:** `_open_pr()` now catches `GithubException` specifically
+  and, on a 422 "already exists" error, looks the existing PR up via
+  `get_pulls()` and returns it as success. No poller/finalize-side locking
+  issue was involved — confirmed via `logs/devdispatch_poller.log` showing
+  exactly one finalize attempt per job, ruling out a poller-vs-poller race.
+  A **job that reports `failed` should not be assumed to have produced no
+  usable work** — check GitHub for an open PR on the job's branch before
+  discarding it, especially for any job predating this fix.
 
 ### Superseded prior art
 
@@ -1748,3 +1803,35 @@ Bugs surfaced in Claude.ai conversation history predating the `bug_tracker` tabl
 - e73d1da docs: diagnose Wilmington headcount gap — cron never wired, not a sync bug
 - 653691f feat: add scheduled poller for devdispatch jobs
 - 27b7465 docs: architecture update 2026-08-04
+
+---
+
+## Recent Changes — 2026-08-06
+
+### ~/watson
+- 70ed0ae docs: bugs/backlog export 2026-08-06
+- 14c1cf2 docs: file map 2026-08-06
+- 7139bb5 docs: document devdispatch duplicate-PR-422 root cause and fix (bug #59)
+- f50910d fix: guard members CSV export against unhandled exceptions (bug #17) (#18)
+- 4793ce6 fix: treat existing-PR 422 as success in devdispatch _open_pr
+- 7bc2f03 Merge pull request #17 from byomes/worktree-devdispatch+20260806-035545
+- b9c7a44 devdispatch: final progress marker
+- aede8c7 devdispatch: document why listChanged capability is not declared
+- 129ec51 Merge pull request #15 from byomes/worktree-devdispatch+20260806-031322
+- d0a6dde Merge main, resolve progress.json conflict
+- 7ade0f4 chore: final devdispatch progress marker
+- 8328caa docs: record merge_claude_code_job as a deliberate spec change
+- 4dfaf09 devdispatch: add merge_claude_code_job tool + merged_at column
+- 217fac5 Merge pull request #13 from byomes/worktree-devdispatch+20260806-024935
+- 1c6bb53 chore: final devdispatch progress marker
+- 7217602 feat: add Watson Recovery orchestration script and runbook
+- f6e23bc feat: back up SSH keys, rclone config, and crontab for recovery
+- 313a5ec feat: add missing deploy manifests for Watson Recovery
+- d92c686 Merge pull request #12 from byomes/worktree-devdispatch+20260806-022512
+- cacfdda chore: final devdispatch progress marker
+- 53144d3 fix: correct local backup path to /mnt/family-storage/watson subfolder
+- eefa591 Merge pull request #11 from byomes/worktree-devdispatch+20260806-020200
+- 495920d chore: final devdispatch progress marker
+- a75b5b8 backup: fix OneDrive job to snapshot DBs and target the live Chroma index
+- 2eece8a backup: add local restic backup to external 2TB HDD
+- 42745e3 docs: architecture update 2026-08-05
