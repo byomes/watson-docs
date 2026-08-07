@@ -1,5 +1,5 @@
 # Watson Architecture
-*Single source of truth. Last updated: August 5, 2026.*
+*Single source of truth. Last updated: August 6, 2026.*
 *Claude Code must read this file before any build.*
 
 ---
@@ -67,23 +67,56 @@ Watson acts on Dr. Bill's behalf under his supervision. Always identified openly
   classifier and a heavy background-job model can now stay resident
   simultaneously without thrashing.
 
-  **This does NOT fully resolve the original risk.** `OLLAMA_NUM_PARALLEL` is
-  still `1` — Ollama still serializes all generate requests one at a time,
-  system-wide, regardless of how many models are resident in memory. A
-  long-running call on a heavy model still blocks every other Ollama request
-  (including intent classification) for its full duration.
+  **This did NOT fully resolve the original risk — confirmed by real test,
+  not assumption, 2026-08-06.** `OLLAMA_NUM_PARALLEL` remained `1` (explicit
+  `Environment="OLLAMA_NUM_PARALLEL=1"` hardcoded in the base
+  `/etc/systemd/system/ollama.service` unit itself, not just an override
+  default) from 2026-07-17 until this test. Ollama serializes all generate
+  requests one at a time, system-wide, regardless of how many models are
+  resident — a long-running call on a heavy model still blocks every other
+  Ollama request (including intent classification) for its full duration.
+  This gap sat untested (not unfixed-and-forgotten, genuinely never
+  re-verified) from 2026-07-17 until this session, exactly the state this
+  note originally warned about.
 
-  Because of that gap, `qwen2.5:14b` remains off every Beelink job for now —
-  **not because the 2026-07-16 fix failed**, but because concurrent-load
-  behavior was never re-tested after the `MAX_LOADED_MODELS` change. (A
-  same-day attempt to reintroduce `qwen2.5:14b` into `state_of_church.py` and
-  `draft_email.py` was made and then reverted before being committed — see the
-  commit that added this note.) Before `qwen2.5:14b` is reconsidered for any
-  job, someone needs to actually test it under real concurrent load: fire a
-  real Telegram message through `classify()` while a long `qwen2.5:14b` call
-  is mid-run, and confirm `classify()`'s 10s timeout/fallback (bug #20,
-  `56d60dd`) behaves correctly under that real contention — not just in
-  isolation.
+  **2026-08-06 test — `OLLAMA_NUM_PARALLEL=2` attempted, made things worse,
+  reverted.** Test harness: `tests/ollama_parallel_test.py` (kept, not wired
+  to any job) — fires a background `qwen2.5:14b` generate call
+  (`num_predict: 700`, ~250–270s wall time on this CPU-only host), waits 5s
+  for it to be genuinely mid-generation, then calls the real
+  `jobs/intent/classifier.classify()` with a realistic message
+  ("remind me to call John tomorrow at 3pm") and times it. Three runs total:
+
+  | Config | `classify()` time | `classify()` result | Heavy call total | Memory (steady) |
+  |---|---|---|---|---|
+  | `NUM_PARALLEL=1` (baseline) | 47.06s | Correct (`reminder_create`) | 272.28s | ~17Gi used / 13Gi avail |
+  | `NUM_PARALLEL=2` (run 1) | 55.06s — hit hard timeout | **Wrong** (`general`) | 262.39s | ~17Gi used / 13Gi avail |
+  | `NUM_PARALLEL=2` (run 2) | 55.06s — hit hard timeout | **Wrong** (`general`) | 247.73s | ~17Gi used / 13Gi avail |
+
+  Both `NUM_PARALLEL=2` runs reproduced identically — not noise. **Root
+  cause: this host has no dedicated GPU** (Intel i5 12th gen, no discrete
+  GPU — see Hardware). Forcing two generate requests to run genuinely
+  concurrently doesn't add compute capacity here; both requests compete for
+  the same finite CPU cores simultaneously, so *both* get slower, whereas
+  strict serialization (`=1`) at least gives whichever request is running
+  full undivided CPU once its turn comes. The classifier lost enough
+  throughput under real parallelism to blow through its own 55s timeout
+  (`jobs/intent/classifier.py` — raised from an earlier value by bug #29,
+  not 10s as this note previously said; corrected here) and silently
+  fall back to the wrong intent — a worse outcome than baseline, not a
+  neutral one. **Memory pressure was never the constraint** — identical
+  ~17Gi/13Gi footprint in both configs, no swap movement either run; the
+  failure is CPU contention, not RAM.
+
+  **Decision: reverted to `NUM_PARALLEL=1`, confirmed live** (override file
+  now contains only `OLLAMA_MAX_LOADED_MODELS=3`; base unit's
+  `OLLAMA_NUM_PARALLEL=1` is what's actually in effect, verified via
+  `systemctl show ollama.service -p Environment`). This is a **closed
+  result, not an open gap** — raising `OLLAMA_NUM_PARALLEL` on this specific
+  host (CPU-only, no GPU) is not a viable fix for the classifier-blocking
+  risk and should not be re-attempted without new hardware (a GPU) changing
+  the underlying constraint. `qwen2.5:14b` stays off every Beelink job,
+  now for a confirmed reason rather than an untested one.
 
 ### PBLaptop — Windows Laptop
 
@@ -199,9 +232,12 @@ Beelink, which starved concurrent Ollama calls and caused intermittent
 multi-second-to-60+-second hangs (root-caused 2026-07-16). Replaced by
 `qwen2.5:7b` on the Beelink across all 12 call sites. See the FMSPC note under
 Hardware — FMSPC is excluded from the automated job loop entirely, permanently.
-Still off every Beelink job as of 2026-07-17 despite that day's
-`OLLAMA_MAX_LOADED_MODELS` bump — see the 2026-07-17 update under the FMSPC
-note for why that change isn't sufficient on its own to bring it back.
+Still off every Beelink job as of 2026-08-06 — the `OLLAMA_MAX_LOADED_MODELS`
+bump (2026-07-17) and a since-reverted `OLLAMA_NUM_PARALLEL=2` attempt
+(2026-08-06, made classifier contention worse, not better — CPU-only host,
+no GPU) were both real fixes to *other* problems, not to this one. See the
+2026-08-06 update under the FMSPC note for the full test results — this is
+now a confirmed-closed result, not an open gap pending a retest.
 
 ---
 
@@ -335,6 +371,77 @@ Dashboard trigger available: "Run Conflict Check" in More tab.
 - Cleanup: `jobs/dev_loop/cleanup.py` — Monday 4am, purges projects older than 7 days
 - Stuck-running handling (`jobs/dev_loop/cleanup.py`): `auto_fail_stuck_running()` runs before the 7-day purge — checks `ps -eo args` for a live `loop.py --slug <slug>` process, and any `dev_projects` row still `'running'` past 2h with no matching process is auto-marked `'failed'` and reported via Telegram. Complements the pre-existing `flag_stuck_running()`, which is read-only and alerts at a 24h threshold without changing status.
 - Projects staged to `~/watson/dev/<slug>/` — never auto-committed to main
+
+---
+
+## Dev Sandbox
+
+Interactive, sandboxed Claude Code sessions launchable from the dashboard —
+**not a Dev Loop variant, a separate system.** Dev Loop above is
+unattended/Ollama-driven. Dev Sandbox is a real, human-attended terminal:
+Bill types into it and answers Claude Code's own prompts himself, isolated
+in a throwaway container and a fresh clone instead of running directly
+against `~/watson`/`~/wcky`. Built and end-to-end tested live 2026-08-06.
+
+- **Job:** `jobs/dev/sandbox_session.py` — `start_session(repo)` /
+  `stop_session(id)` / `list_running()`, plus the Flask blueprint
+  (`dev_sandbox_bp`, registered in `jobs/dashboard/app.py`)
+- **Image:** `deploy/dev-sandbox/` (`watson-dev-sandbox:latest`) — minimal
+  `node:22-bookworm-slim` + git/tmux/ttyd + `@anthropic-ai/claude-code`
+  (npm). No app-server, no model-routing layer — Claude Code talks to its
+  own auth/model access directly, same as at a host terminal.
+- **Auth — deliberately different from the OpenHands sandbox test earlier
+  the same night** (built, tested, then fully unwired and reverted — see
+  git log "revert OpenHands Claude Code credential mount", same date).
+  That container ran as a fixed image-baked UID that didn't match the
+  host, so the only way to get it to read `~/.claude` was to extract a
+  scoped copy of the OAuth token into a separate, world-readable file —
+  flagged as a ToS/security risk and fully reverted, nothing kept "just in
+  case." Dev Sandbox has no such excuse: the image is ours end to end and
+  every container runs `--user 1000:1000`, matching the Beelink host user,
+  so the **real** `~/.claude` directory *and* `~/.claude.json` (both
+  required — confirmed live; Claude Code ignores a valid
+  `.credentials.json` without the account-state file at the home-dir root
+  too, and shows its first-run login wizard instead) mount read-write with
+  their actual host permissions intact. No extraction, no copy, ever. Also
+  not headless: no `--dangerously-skip-permissions`, Bill is present for
+  every action a session takes.
+- **Workspace:** fresh `git clone --depth 1` (via `GITHUB_TOKEN`, then
+  `origin` rewritten to a plain URL so the token never sits in `git remote
+  -v` output inside the session) into `~/dev-sandbox/<session-id>/` —
+  never a direct mount of `~/watson` or `~/wcky`. Repo allow-list:
+  `watson`, `wcky`, `watson-admin`, `watson-ui`, `bodyrec` — `fms` excluded
+  because that GitHub repo doesn't exist yet (see FMS Site section).
+- **Networking:** ttyd on a container-internal fixed port (7681), mapped to
+  a host port from `7700–7749`, bound explicitly to the Tailscale IP
+  (`100.117.237.96`) — never `0.0.0.0`. Confirmed live: reachable via the
+  Tailscale IP, hard connection failure via the LAN IP
+  (`192.168.1.204`). Never proxied through the public Funnel (that's
+  scoped to `:5200` only).
+- **Table:** `dev_sandbox_sessions` (`watson.db`) — `id, repo,
+  container_id, container_name, port, status [running|stopped],
+  created_at, stopped_at`
+- **Routes** (dashboard, `_admin_required()`-gated): `GET
+  /api/dev-sandbox/repos`, `GET /api/dev-sandbox/status`, `POST
+  /api/dev-sandbox/start`, `POST /api/dev-sandbox/stop`
+- **Dashboard:** More tab → Dev Sandbox tile, same 2-column grid/expand
+  pattern as BodyRec/Thesis Tracker/Email Activity. Repo picker → Start
+  Session → terminal **opens in a new tab, not an iframe** — ttyd's
+  headers carry no framing restriction (checked live, so an iframe isn't
+  technically blocked), but this wasn't verified as a real mobile-Safari
+  UX test (no physical device available this session) — new tab was
+  chosen as the zero-surprise default since ttyd's xterm.js terminal is
+  always used standalone upstream and needs full viewport control for
+  touch/virtual-keyboard handling, which a same-page iframe tends to
+  fight. Worth an actual phone test before ever reconsidering the iframe
+  path.
+- **Lifecycle:** explicit Stop only for v1, no auto-timeout/cleanup job —
+  tracked as `project_backlog` id=33, not silently left undocumented.
+- **Out of scope for v1 (by design, not oversight):** no headless/
+  unattended mode, no Telegram trigger, no auto-cleanup. Sessions should
+  branch and PR rather than push to main — guidance, not a technical gate,
+  since Bill is directly at the keyboard the same as host-level Claude
+  Code today.
 
 ---
 
@@ -1835,3 +1942,19 @@ Bugs surfaced in Claude.ai conversation history predating the `bug_tracker` tabl
 - a75b5b8 backup: fix OneDrive job to snapshot DBs and target the live Chroma index
 - 2eece8a backup: add local restic backup to external 2TB HDD
 - 42745e3 docs: architecture update 2026-08-05
+
+---
+
+## Recent Changes — 2026-08-07
+
+### ~/watson
+- 4e27282 docs: bugs/backlog export 2026-08-07
+- 5a6294f docs: file map 2026-08-07
+- deef31c feat: ACX audiobook mastering pipeline (jobs/audiobook/)
+- d3afb2d fix: Dev Sandbox nav header actually invisible — ttyd wipes static <body> HTML
+- c9b1cc1 feat: Dev Sandbox — dial font to 15px, add persistent Dashboard nav bar
+- c3171f6 fix: Dev Sandbox terminal font size — 22px too large, dial to 18px
+- 28f12a2 fix: Dev Sandbox terminal too small on mobile Safari
+- a486c35 feat: Dev Sandbox — interactive, sandboxed Claude Code sessions from dashboard
+- 1137ca1 docs: test and revert OLLAMA_NUM_PARALLEL=2 — CPU-only host makes it worse
+- f861c05 docs: architecture update 2026-08-06
