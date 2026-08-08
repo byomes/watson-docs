@@ -481,6 +481,42 @@ connector successfully authorized and connected as of 2026-08-04.
 - **Table:** `claude_code_jobs` (`watson.db`) — `id, spec_text, repo, branch,
   status [queued|running|done|failed|expired], pr_url, log_path, summary,
   cli_session_id, last_progress_step, merged_at, created_at, updated_at`.
+  (The live table also carries two now-unused columns, `sandbox_session_id`
+  and `terminal_url`, left in place from the reverted Dev Sandbox experiment
+  below — see the revert note. They're harmless/NULL and were kept rather than
+  dropped destructively on the live DB.)
+
+### Dev Sandbox integration + `get_job_output` — tried and reverted the same night (2026-08-08)
+
+On the night of 2026-08-07 two changes were built on top of the dispatcher and
+then **reverted the same night** — this note exists so a future session doesn't
+re-attempt the identical approach without knowing why it was rolled back:
+
+1. **Dev Sandbox integration** (PR #22, commit `96ec502`) — `dispatch_claude_code_job`
+   was rewired to launch the Claude Code session *inside* the Dev Sandbox
+   (Docker/tmux/ttyd) and return a live `terminal_url` + `sandbox_session_id`
+   instead of a headless background job.
+2. **`get_job_output`** (commit `ec235ab`) — a 4th read-only MCP tool for
+   diff/worktree/log inspection of a dispatched job.
+
+**Both reverted** via `git revert` of `96ec502` and `ec235ab` (2026-08-08).
+`dispatch_claude_code_job` is back to the headless `claude --bg` shape
+documented just below (no `terminal_url`/`sandbox_session_id` in its return),
+and the tool list is back to the three tools above.
+
+**Why reverted — real friction, not a whim:** the sandbox container had **no
+GitHub credentials inside it**, so a dispatched session running there couldn't
+push a branch or open a PR (the whole point of a dispatch job); and the
+sandbox image is deliberately **not headless** — it prompts for permission on
+each action (built for a human at the keyboard), so an unattended dispatched
+job just stalled waiting on prompts nobody was there to answer. Solve both of
+those (credentials in-container + a genuinely headless/auto-approve mode)
+before re-attempting this integration.
+
+**Not reverted / still live:** the manual **Dev Sandbox** feature itself
+(`jobs/dev/sandbox_session.py` + the dashboard More-tab "start a sandbox"
+button) is untouched and still works for human-attended use — only the
+`dispatch_claude_code_job` integration into it was rolled back.
 
 ### CLI invocation (the real shape, not the originally-guessed one)
 
@@ -979,6 +1015,18 @@ Wired into both `bot.py` and `jobs/dev_loop/loop.py`.
   every pre-existing account when the `adelphos_new_accounts` table is empty. Full live end-to-end
   test passed 2026-08-01 (real throwaway account created, alerted, deleted via two real Telegram taps,
   confirmed gone from Moodle).
+- **Email-visibility fix (2026-08-07):** Alerts were showing "(not visible)" for the email on every
+  signup. Root cause was Moodle-side, not Watson: the `watson_users` role was missing the
+  `moodle/site:viewuseridentity` permission, so `core_user_get_users` silently omitted `email` for
+  every user except the calling account itself. Bill granted the permission in the Moodle admin UI;
+  email now flows correctly (confirmed 38/38 users via direct API test). Two code-hardening fixes
+  shipped alongside (`jobs/adelphos/security_monitor.py`, commits `fe45314` + `043b103`):
+  (1) the IP fallback text is now "(not exposed by Moodle API)" — `lastip` is absent from the
+  `core_user_get_users` response structure regardless of permissions, so signup IP is genuinely
+  unavailable by design, **not** a fixable privacy setting; (2) the old `deleted=0` API criteria was
+  a silently-ignored no-op (Moodle 5.0 rejects `deleted` as an unsupported search key and returns the
+  full roster anyway), so the monitor now pulls the full roster via a placeholder criteria and filters
+  deleted / suspended / system accounts (guest id 1, admin id 2) client-side in Python.
 - **Remaining course-development jobs (Priority 2, deferred, not started):** Lesson builder, quiz
   generator, course spec system, weekly monitoring digest, student stuck alert, course announcement
   emails, student welcome message.
@@ -1958,3 +2006,27 @@ Bugs surfaced in Claude.ai conversation history predating the `bug_tracker` tabl
 - a486c35 feat: Dev Sandbox — interactive, sandboxed Claude Code sessions from dashboard
 - 1137ca1 docs: test and revert OLLAMA_NUM_PARALLEL=2 — CPU-only host makes it worse
 - f861c05 docs: architecture update 2026-08-06
+
+---
+
+## Recent Changes — 2026-08-08
+
+### ~/watson
+- 5adb686 docs: bugs/backlog export 2026-08-08
+- 9157d4f docs: file map 2026-08-08
+- 8b818c0 Merge pull request #23 from byomes/fix/remove-dev-sandbox-tile
+- a0b16f5 fix(dashboard): remove Dev Sandbox tile from More menu
+- 99d28de docs(adelphos): record email-visibility fix + IP/filtering hardening
+- 043b103 fix(adelphos): replace no-op deleted criteria with client-side filtering
+- fe45314 fix(adelphos): correct IP fallback text to "(not exposed by Moodle API)"
+- 9408355 docs: note Dev Sandbox dispatch integration + get_job_output reverted same night
+- 1118eef Revert "devdispatch: add read-only get_job_output MCP tool"
+- 07f3579 Revert "devdispatch: run dispatch_claude_code_job inside Dev Sandbox with live terminal_url (#22)"
+- 96ec502 devdispatch: run dispatch_claude_code_job inside Dev Sandbox with live terminal_url (#22)
+- 116c69b feat(audiobook): breath suppression + parameter-adjusting retry loop (#20)
+- ec235ab devdispatch: add read-only get_job_output MCP tool
+- d451c1f docs: architecture update 2026-08-07
+
+### ~/wcky
+- ab6f651 Merge pull request #3 from byomes/fix/blog-duplicate-category-labels
+- fb0411b fix(blog): de-duplicate category labels via shared getPostLabels helper
