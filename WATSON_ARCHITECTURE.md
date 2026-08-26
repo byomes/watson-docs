@@ -836,6 +836,264 @@ restart-only scope (see Development Conventions), so it's flagged in
 
 ---
 
+## Session Archives (Claude.ai)
+
+Built 2026-08-25. Lets Bill say "send to watson" (or a close variant) at the
+end of any Claude.ai session and have the full transcript, plus any files
+created that session, archived durably on Watson — retrievable later by a
+future Claude.ai session with no memory of the original conversation.
+Separate, purpose-built capability — not an extension of the small ad-hoc
+`note:`/`list notes`/`search notes` skills, which still exist independently
+for quick one-off notes.
+
+**Write path — dedicated MCP tool, not the skill router.** `archive_session`
+is declared directly in `_TOOLS`/`_TOOL_IMPLS` in `jobs/devdispatch/api.py`,
+alongside `dispatch_claude_code_job` etc. — it needed its own tool schema
+because it takes structured params (a file array) that `run_watson_skill`'s
+single `message` string can't carry. Params: `transcript` (full verbatim
+text, required), `files` (array of `{filename, content_base64}`, required —
+empty array if none), `project` (required — no silent default; the caller
+must pass `general` explicitly if a session isn't tied to a specific
+project), `title` and `summary` (both written by Claude.ai itself, like
+`title` already was for other tools). Inherits the same auth gate
+(`X-Watson-Key` / bearer) as every other tool on `/mcp/devdispatch` — no new
+auth surface.
+
+**Read path — via `run_watson_skill`, same mechanism as `kb_search`.** Five
+new skills, registered in `memory/skills.json` and added to
+`_MCP_SKILL_ALLOWLIST`: `list_archives`, `search_archives`, `get_archive`,
+`list_projects`, `get_project_summary`. Each function's first parameter is
+named `message` so `router._run_skill` forwards the raw trigger-prefixed
+text directly. Deterministic trigger phrases added to `_SKILL_PRE_CHECKS` in
+`jobs/skillbuilder/router.py` (`list archives:`, `search archives:`, `get
+archive:`, `list projects`, `project summary:`) — matched before any LLM
+routing call, so these are never a judgment call. Looser natural phrasing
+("catch me up on X") falls through to the existing LLM semantic router, same
+as `kb_search` already relies on with no pre-check trigger of its own.
+
+- `get_archive: <id>` returns the full transcript + a list of attached
+  filenames (not their content — could be large/binary). `get_archive: <id>
+  <filename>` (id followed by a filename token, same skill) returns that one
+  file's base64 content instead — deliberate 2-call shape rather than a 4th
+  tool, since most retrieval only needs the transcript text.
+- `list_projects` returns every project slug with at least one archive, plus
+  archive count and most-recent `created_at` — how a cold session discovers
+  what project slugs even exist, instead of guessing.
+- `get_project_summary: <project>` reads
+  `data/session_archives/<project>/_summary.md` directly (capped at ~20KB
+  read, newest-entries-first so a cap only ever drops the oldest context) —
+  the fast catch-up layer, not a substitute for pulling full archives.
+
+**Storage:** `jobs/session_archives/` (`schema.py` + `storage.py`).
+Filesystem layout:
+```
+data/session_archives/<project-slug>/<timestamp>-<title-slug>/
+  transcript.md   — frontmatter (project, title, created_at, secrets_flagged[, secrets_patterns]) + the verbatim transcript
+  <files...>      — sanitized filenames, as submitted
+data/session_archives/<project-slug>/_summary.md   — rolling recap, newest entry prepended to the top after every archive_session call
+```
+Timestamp-first directory naming means no two archives can collide.
+Filenames are sanitized before ever touching the filesystem (path
+separators stripped, collapsed to a bare basename) — an incoming filename is
+untrusted input; a raw `../../etc/...`-shaped value must not be able to
+write outside the archive directory. Confirmed empirically during build: a
+test file submitted as `../../etc/evil` landed as `evil` inside the archive
+dir, not outside it.
+
+Mirrored into SQLite (`session_archives` table in `watson.db`, via the same
+`core.database.get_connection()` every other job uses) for fast listing and
+search — full transcript text stored in the DB row too, not just on disk.
+Search uses an FTS5 external-content virtual table
+(`session_archives_fts`, kept in sync by an explicit paired INSERT in
+`archive_session()`, not a trigger — there is exactly one write path, so a
+trigger would be unnecessary machinery); confirmed FTS5 is compiled into
+this box's Python 3.12 stdlib `sqlite3`. `search_archives` falls back to a
+plain `LIKE` query if FTS5 is ever unavailable (wrapped in try/except at
+both create-table and query time) — same call shape either way, so this is
+invisible to a caller.
+
+**Size caps** (decoded bytes): 8MB per file, 20MB total per archive
+(transcript + accepted files combined), 5MB hard cap on the transcript
+itself (an error, not a skip — the transcript is the core content, never
+optional). A file over its cap is rejected individually and reported back
+in `skipped_files` with a reason — never silently dropped.
+
+**Secret guard:** before writing, `transcript` (and any file that decodes as
+UTF-8 text) is scanned against a fixed set of regexes — AWS access keys,
+GitHub/Slack/Stripe tokens, PEM private-key headers, bearer tokens, and
+generic `api_key:`/`secret:`/`token:`/`password:`-shaped assignments. A hit
+never strips or blocks anything — it sets `secrets_flagged: true` +
+`secrets_patterns` in both the tool's response and `transcript.md`'s own
+frontmatter, so a cold future `get_archive` call still surfaces the warning
+even with no memory of why it was flagged.
+
+**Backup coverage — actually tested, not just read from the script.**
+`data/` (which now includes `data/session_archives/`) was already inside
+both of Watson's nightly backup legs with zero changes needed. Verified for
+real during this build: archived a test session (with a file, and a
+deliberately-injected fake secret to confirm the flag fires), ran
+`jobs/backup_local.py` (the local restic leg) manually, then `restic
+restore latest` to a scratch path and `diff -r`'d it against the live
+`data/session_archives/` tree — byte-identical. Only the local leg was
+exercised live (no test data pushed to the real OneDrive leg,
+`jobs/backup.py`, which backs up the same `data/` tree via a different
+mechanism); a live OneDrive round-trip hasn't been separately confirmed.
+Test archives and DB rows were deleted after verification — nothing left
+behind.
+
+**Not built:** no dashboard UI for browsing archives (retrieval is
+Claude.ai/Telegram/dashboard-chat only, via the skills above, or direct
+filesystem/`sqlite3` access); no edit/delete of an existing archive once
+written (append-only by design — the entire point is not losing data, so
+nothing removes it once archived); no binary-file secret scanning (only
+UTF-8-decodable file contents are scanned, same as the transcript).
+
+### Bulk account import + nightly ingest (added 2026-08-26)
+
+Beyond live "send to watson" archiving, the whole account can be pulled in
+via Claude.ai's own **Settings → Export data** feature (Anthropic's account
+data export, not the Claude API — produces a manifest JSON pointing at 4
+single-use download URLs: `light_metadata`, `projects`, `memories`,
+`conversations`). The download URLs sit behind Cloudflare bot protection —
+confirmed a bare `curl` from Watson gets a "Just a moment..." challenge page,
+not the file — so they must be opened in Bill's own logged-in browser; only
+the resulting zips travel to Watson (scp to `~/watson/incoming/claude_export/`
+over Tailscale). **Never recursively copy Bill's whole `OneDrive\Claude`
+folder** — that's his general legacy working directory (contains
+`SECRETS.md`, `credentials.json`, full repo checkouts with `node_modules`),
+not export-scoped; a `scp -r .` from the wrong directory pulled ~60k
+unrelated files including the master secrets store into `incoming/` on
+2026-08-26 (cleaned up, nothing left on Watson, originals on Bill's machine
+untouched — but don't repeat the mistake).
+
+The `conversations.json` inside the export has **no project field** —
+confirmed by checking all 992 entries' key sets in the first import — so
+which project a conversation belongs to has to be inferred, not read off the
+data. `jobs/session_archives/classify.py` does this with local embedding
+similarity (`all-MiniLM-L6-v2`, same model `jobs/skills/kb_search.py`
+already uses — no LLM call, no network) rather than an LLM classification
+call per conversation: embeds each named Claude.ai project's name+description
+as a reference vector, embeds each conversation's title+summary as a query,
+cosine-similarity match, `CLASSIFY_THRESHOLD = 0.40`. Calibration check:
+real matches scored ~0.69-0.70, an unrelated pair ~0.15 — clean separation.
+Blank-named Claude.ai projects (auto-grouped throwaway chats) are excluded as
+classification targets, not just low-confidence — they're not real writing
+projects. Anything that doesn't clear the threshold lands in
+`claude-account-import`, the catch-all for genuinely miscellaneous chats.
+
+**First import (2026-08-26):** all 992 conversations from the account,
+zero errors, 538 files recovered as real attachments (not just inline text —
+extracted from `artifacts` tool-use blocks with `command` in
+`create`/`rewrite`, and `create_file`/`file_create` tool-use blocks with
+`file_text`; `update`-command artifacts and other tool-created files aren't
+captured, just referenced in the transcript text), 65 conversations flagged
+for possible secrets (mostly real — Watson-development conversations that
+plausibly had live tokens pasted into them; not stripped, per the existing
+secret-guard design, so a review pass is still owed). This first batch
+landed entirely in `claude-account-import` since the classifier didn't exist
+yet — `jobs/session_archives/backfill_reclassify.py` (one-time, not cron;
+see below) sorts it retroactively once a fresh export is available again to
+reconstruct titles/summaries against.
+
+Rendering an export conversation into the (transcript, files, title,
+summary) shape `archive_session()` expects is shared logic
+(`jobs/session_archives/claude_export_render.py`) between the nightly
+importer and the backfill tool, so they can't drift into rendering the same
+format two different ways. Content-block types seen across the account:
+`text`, `tool_use`, `tool_result`, `thinking`, `voice_note`, `token_budget`
+(skipped — no real content). `attachments` on a message carry
+Anthropic's own `extracted_content` (plain text pulled from an uploaded
+PDF/doc) which gets folded into the transcript; bare `files` references
+(uuid + filename only, no bytes) are noted inline as unrecoverable from this
+export format.
+
+**Real bug found and fixed during the first bulk import:** `archive_session`
+built its directory name from `timestamp-title_slug` and did
+`mkdir(exist_ok=True)` — two archives landing in the same second with the
+same title (exactly what a fast bulk import produces) would silently share
+one directory, the second overwriting the first's `transcript.md`. Fixed by
+disambiguating with a `-1`/`-2`/... suffix, the same pattern already used for
+file-name collisions within one archive; verified with a same-second,
+same-title test before running the real 992-conversation batch. Commit
+`3dcecb9`.
+
+**`jobs/session_archives/claude_export_import.py`** — the nightly cron job
+(`45 1 * * *`, ahead of KB sync at 2am and local backup at 2:30am; see
+`memory/CRON.md`). Looks for `conversations-*.zip` in the drop folder (does
+nothing if absent — Bill only exports periodically, not nightly); if found,
+extracts, skips any conversation whose uuid is already in
+`session_archives.source_conversation_uuid` (repeat exports are full account
+snapshots, not deltas, so heavy overlap with what's already archived is
+expected every run), classifies and archives the rest, deletes the consumed
+zips, sends a Telegram summary — every run, even a plain "nothing new" ping,
+matching `jobs/kb/sync_and_index.py`'s convention so a quiet night reads as
+"checked, nothing to do" rather than looking identical to a dead cron job.
+Does **not** reclassify anything already sitting in the catch-all from a
+prior run — that churn-vs-value tradeoff belongs to a human decision, not a
+nightly job, which is why backfill is a separate manual tool.
+
+**`jobs/session_archives/backfill_reclassify.py`** — one-time, not cron.
+The 992-conversation first import predates `source_conversation_uuid`, so
+its rows can't be matched back to a source conversation by id — matches by
+exact title instead (`claude_export_render.build_title()` is deterministic,
+same conversation always produces the same title). Only touches 1:1 title
+matches — a title shared by more than one archived row or more than one
+export conversation is left alone and reported rather than guessed at,
+since a wrong reclassification is worse than staying unsorted. Run via
+`python3 -m jobs.session_archives.backfill_reclassify` after dropping a
+fresh `conversations-*.zip` + `projects-*.zip` pair.
+
+**Manual project refs** (`data/session_archives/_manual_project_refs.json`,
+via `classify.add_manual_project_ref()`) — hand-written classification
+targets that survive the auto cache being fully overwritten on every real
+export (`_project_refs.json`). Two uses: (1) a bucket for real, ongoing work
+that never happened inside a Claude.ai Project container — e.g. after the
+first backfill left ~370 conversations unsorted, ~185 of them turned out to
+be Watson development work (dashboard, bot, backups, congregation.db, etc.)
+done as plain chats, not inside a Project. (2) Enriching a *real* project's
+classification signal — Claude.ai project description fields are usually
+blank, so a real project's own text is often just its bare name, too weak a
+signal to reliably catch related chats. A manual ref sharing a real
+project's slug **overrides** that project's auto-derived text rather than
+being skipped (`classify._merge_manual()`), rather than existing as a
+separate duplicate bucket. Concretely: Bill's real "Development Project"
+(`development-project`) is where he plans Watson upgrades — the manual ref
+for that slug carries a full paragraph describing Watson's architecture,
+which is what actually caught those ~185 conversations; the original
+synthetic bucket idea was retired the same session once this came up.
+
+**`CLASSIFY_THRESHOLD` lowered from 0.40 to 0.30, permanently** — the first
+backfill at 0.40 left ~649 conversations unsorted, most genuinely
+classifiable; re-running at 0.30 moved 270 more with no visible false
+positives spot-checked at the low end (0.30-0.35 range). Kept as the real
+default in the code, not just a one-off override for that run.
+
+**Live `archive_session` now auto-classifies too, not just the nightly
+importer.** Originally, only the account-export pipeline ran the classifier
+— a live "send to watson" call always required Claude.ai to name a project,
+with no silent default. That fell apart once it was clear most of Bill's
+actual work (per the 992-conversation import) never happens inside a formal
+Claude.ai Project at all — Claude.ai usually can't know which of Bill's
+named projects a given live session belongs to either, so requiring it to
+state one was asking it to guess blind. Now: if `archive_session` is called
+with `project: "general"`, it runs the same classifier
+(`classify.load_project_refs_cache()` + `classify.classify()`) against the
+title/summary before accepting "general" as the real answer — same cached
+project refs, same 0.30 threshold, immediate at write time (no incoming-
+folder detour, no overnight wait — considered and rejected: the nightly
+importer only knows how to parse Anthropic's raw export JSON shape, not an
+already-rendered `archive_session` transcript, so literally routing
+`archive_session` through the same folder+cron pipeline would have meant
+faking that format for no real benefit). A project Claude.ai *does* name
+explicitly is never second-guessed — auto-classify only fires on the literal
+"general" fallback. Result carries `auto_classified: true/false` so it's
+visible which path a given archive took. Verified live: a clearly
+Watson-flavored session auto-landed in `development-project`; a deliberately
+weak/generic one correctly fell through to `general` rather than guessing
+wrong (score 0.27, under threshold) — both cleaned up as test data after.
+
+---
+
 ## Writing Room (`williamckyomes.com/room`)
 
 Private community hub for Writing Room Partners (invitation-only, earned via ARC completion).
@@ -2497,3 +2755,19 @@ Bugs surfaced in Claude.ai conversation history predating the `bug_tracker` tabl
 - eb40d7c devdispatch: commit already-live run_watson_skill/list_watson_skills MCP tools
 - 7b1a1da devdispatch: fix stale-main false-422 and branch-mismatch push failure (bug #95) (#50)
 - 8823fac docs: architecture update 2026-08-24
+
+---
+
+## Recent Changes — 2026-08-26
+
+### ~/watson
+- 5f9f8ef docs: bugs/backlog export 2026-08-26
+- 59e18c7 Let manual project refs override a real project's classification signal
+- f80be20 docs: file map 2026-08-26
+- 606e809 Add nightly Claude.ai export ingest with project classification
+- 3dcecb9 Fix archive directory collision when two archives share a title in the same second
+- 61f98f2 Add Claude.ai session archive system (archive_session + retrieval skills)
+- 60708a1 fix: deacon reports show email + phone, drop address
+- b4b9609 feat: deacon shepherding reports + admin API
+- 797fb66 docs: regenerate Skills & Capabilities Catalog
+- aec6f09 docs: architecture update 2026-08-25
