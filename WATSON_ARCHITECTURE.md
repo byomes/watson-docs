@@ -33,7 +33,7 @@ Watson acts on Dr. Bill's behalf under his supervision. Always identified openly
 - **Ollama:** Bound to `0.0.0.0`. Models: `llama3.2:3b` (primary chat/intent), `qwen2.5-coder:7b` (Dev Loop, KB, structured reasoning), `qwen2.5:7b` (accuracy-sensitive background jobs — pastoral notes, email drafts, task/goal extraction, State of Church synthesis, skill/capability audits), `phi3:mini` (background tasks), `gemma3:1b` (fast/lightweight)
 - **External storage:**
   - `/mnt/external` — USB SSD, holds `OLLAMA_MODELS`. Existing, untouched by the backup build below.
-  - `/mnt/family-storage` — USB 2TB HDD (ext4, `sda1`), already mounted; added to Watson's use 2026-08-05. **Dual-purpose**: also serves as family NAS storage, not dedicated to Watson. Same power bar as the Beelink itself, so Watson's use of it is a **local/fast recovery tier, not an offsite/disaster-recovery leg** — a power event takes out both together. Watson's own data (backups for now, possibly other things later) is isolated under `/mnt/family-storage/watson/`, `chmod 700` and owned by `billyomes` only, so the family NAS side can't read or write into it regardless of how the share is configured. `jobs/backup_local.py` (restic, 2:30am) backs up to a repo at `/mnt/family-storage/watson/restic-repo`. OneDrive (`jobs/backup.py`, 3am) remains the actual offsite disaster leg, unchanged in scope/purpose — the two legs run independently, both full scope, neither chained off the other. One-time subfolder-creation/restic-init steps are manual (`docs/BACKUP_SETUP.md`), not automated by Claude Code.
+  - `/mnt/family-storage` — USB 2TB HDD (ext4, `sda1`), already mounted; added to Watson's use 2026-08-05. **Dual-purpose**: also serves as family NAS storage, not dedicated to Watson. Same power bar as the Beelink itself, so Watson's use of it is a **local/fast recovery tier, not an offsite/disaster-recovery leg** — a power event takes out both together. Watson's own data (backups for now, possibly other things later) is isolated under `/mnt/family-storage/watson/`, `chmod 700` and owned by `billyomes` only, so the family NAS side can't read or write into it regardless of how the share is configured. `jobs/backup_local.py` (restic, 2:30am) backs up to a repo at `/mnt/family-storage/watson/restic-repo`. OneDrive (`jobs/backup.py`, 3am) remains the actual offsite disaster leg, unchanged in scope/purpose — the two legs run independently, both full scope, neither chained off the other. One-time subfolder-creation/restic-init steps are manual (`docs/BACKUP_SETUP.md`), not automated by Claude Code. `scripts/watson_recover.sh` (see `docs/RECOVERY.md`) rebuilds Watson from this restic repo on a fresh machine — its restore step is scope-generic (mirrors whatever the backup actually contains under `$HOME`, no hardcoded per-directory list to drift out of sync), and as of 2026-08-30 it's tested end-to-end (all 14 steps, via a Docker sandbox — a plain container for the restore/dependency steps, a systemd-enabled one for the systemd/service-install steps). `deploy/apt-packages.txt` covers everything installable via plain `apt-get` (now including `cron`, `curl`, `ca-certificates`, `zstd`); Tailscale and Ollama are deliberately excluded from that list and installed via their own official installer scripts instead, since neither is in stock Ubuntu's apt repos. The systemd-install step names `watson-bot.service`/`watson-dashboard.service` explicitly rather than globbing `deploy/*.service`, since that directory also holds `gutendex.service` (a separate install, not covered by this script) and a stale, unused `people-server.service`.
 
 ### FMSPC — Windows Desktop (GPU Tasks Only)
 
@@ -262,7 +262,7 @@ now a confirmed-closed result, not an open gap pending a retest.
 | Bible API | Scripture lookup | `api.scripture.api.bible` — NIV, CSB, NASB |
 | Serper.dev | Web search | Used in KB and research jobs |
 | Scribbl | Meet transcripts | Chrome extension → auto-emails transcript to `watson.wcky@gmail.com` post-call |
-| OneDrive | Nightly backup (offsite disaster leg) | rclone `Watson-Backup` remote, 3am cron — backs up data/ (the four core DBs snapshotted via `sqlite3 .backup`, not copied live), config/, `data/chroma/` (the live vector index — corrected 2026-08-05 from the orphaned `kb/chroma/`, remote path `chroma-live`), kb/documents/, .env |
+| OneDrive | Nightly backup (offsite disaster leg) | rclone `Watson-Backup` remote, 3am cron — backs up data/ (the four core DBs snapshotted via `sqlite3 .backup`, not copied live), config/, `data/chroma/` (the live vector index — corrected 2026-08-05 from the orphaned `kb/chroma/`, remote path `chroma-live`), kb/documents/, .env, `~/.claude/projects` (Claude Code's own session memory, remote path `claude-projects`, added 2026-08-30) |
 | FlareSolverr | Cloudflare JS challenge bypass | `localhost:8191`, persistent Docker container (`docker run -d --name=flaresolverr --restart unless-stopped`, not systemd). Used by `jobs/curator/research.py` for romance.io only (`_FLARESOLVERR_DOMAINS`) — resolves project_backlog id=18. `jobs/research/gutenberg.py` does NOT route through it — its `search()` already works via a self-hosted local Gutendex instance (`gutendex.service`, `127.0.0.1:8010`, since 2026-07-15) and `download_and_ingest()` downloads text directly from gutenberg.org; neither hits the Cloudflare-blocked public gutendex.com. That self-hosted catalog has its own staleness gap (no refresh job — see project_backlog, new item added 2026-07-22) unrelated to Cloudflare. |
 | iOS Shortcut → Curator | ChatGPT-research book import (Curator) | Added 2026-08-08. A family member researches a book in the ChatGPT app, copies ChatGPT's reply, and an iOS Shortcut POSTs the text to `POST /api/curator/ingest/chatgpt` — auth via `X-Watson-Key: CURATOR_IMPORT_KEY`, a **new key scoped to this one route only**, deliberately not `WRITING_ROOM_API_KEY`. Body `{research_text, submitted_by}` (only guard: `len < 30`). The worker's `chatgpt_text` branch extracts title/author/series/KU + **verbatim** spice findings via `qwen2.5:7b` and creates the book directly — no `research_book_fast()` / Stage B for this path (those still run for every other Curator ingest path). Share-**link** fetch was built first (`96f64a5`) then abandoned (`bd6a89a`): ChatGPT `/share/<uuid>` and `/s/t_...` links sit behind a login wall ("Log in to view this conversation") even after full JS render, so there's no publicly fetchable content — confirmed by a direct render test. That retired step left a reusable, out-of-process page renderer, `jobs/browser/render_page.py` (`225103b`) — subprocess-isolated per `jobs/browser/browser_service.py`'s guardrail, robots.txt enforced — in place for future use, no longer called by Curator. See project_curator memory for detail. |
 
@@ -309,8 +309,8 @@ now a confirmed-closed result, not an open gap pending a retest.
 | `jobs/team/reminders.py --overdue` | Mon–Thu 10am | Overdue task reminders |
 | `jobs/team/reminders.py --unanswered` | Mon–Thu 10am | Unanswered comms reminders |
 | `jobs/team/note_task_scan.py` | Tue/Wed/Thu 7am | Extract tasks from shared notes → Donna approval email |
-| `jobs/backup.py` | Daily 3am | OneDrive backup via rclone (offsite disaster leg) |
-| `jobs/backup_local.py` | Daily 2:30am | Local restic backup to `/mnt/family-storage/watson/` (fast/versioned recovery leg, independent of OneDrive — see Hardware) |
+| `jobs/backup.py` | Daily 3am | OneDrive backup via rclone (offsite disaster leg) — `data/`, `config/`, `data/chroma/`, `kb/documents/`, `.env`, `~/.claude/projects` (added 2026-08-30) |
+| `jobs/backup_local.py` | Daily 2:30am | Local restic backup to `/mnt/family-storage/watson/` (fast/versioned recovery leg, independent of OneDrive — see Hardware). Full scope: DB snapshots, `data/` (incl. chroma), `config/`, `.env`, `memory/`, `kb/documents/`, `~/.ssh`, `~/.config/rclone/rclone.conf`, `~/.claude/projects` (added 2026-08-30), a crontab snapshot, plus full working trees (code + uncommitted changes + `.git` history) of every actively-developed repo — `watson, wcky, watson-admin, watson-ui, watson-docs-sync, comms-desk, comms-assets, curator, bodyrec, fms` (added 2026-08-22) — excluding `node_modules/venv/.venv/.next/dist/build/__pycache__`. Retention: 14 daily/8 weekly/6 monthly (`restic forget --prune`) |
 | `jobs/dev_loop/cleanup.py` | Mon 4am | Purge Dev Loop projects older than 7 days |
 | `jobs/dev/file_map.py` | Daily 2am | Auto-update FILE_MAP.md |
 | `jobs/dev/bugs_backlog_sync.py` | Daily 2am | Regenerate BUGS.md / DEV_PROJECTS.md from bug_tracker / project_backlog, push to byomes/watson-docs |
@@ -331,6 +331,7 @@ now a confirmed-closed result, not an open gap pending a retest.
 - `jobs/meet/summarize.py` — Meet transcript summarization via Scribbl → Gmail → Watson
 - `jobs/trading/` — Paper-trading strategy pipeline (Alpaca paper API only) — see Paper-Trading Strategy Pipeline section below
 - `jobs/tools/` — wtsn.me public-tools registry (register/query/gate `public_tools` rows, `/api/tools/resolve/<slug>` blueprint) — no cron entry, purely dispatch/on-demand: tools are registered by a build step, gated live by Telegram confirm, never scheduled — see Public Tools (wtsn.me) below
+- `jobs/telegram/` — `seed_claim_codes.py` (one-off leader onboarding), `send_to_person.py` (generic per-person send), `pending.py`, `resend_last.py` — no cron entry, seeding is manual/one-off per leader — see Telegram Leader Onboarding above
 
 ---
 
@@ -515,6 +516,57 @@ Three sections, each suppressed if empty: WILMINGTON CAMPUS / ONLINE CAMPUS / HY
 ### Conflict Resolution
 Sunday 5pm Telegram report with 3-button resolution: Keep Old / Keep New / Skip
 Dashboard trigger available: "Run Conflict Check" in More tab.
+
+---
+
+## Telegram Leader Onboarding
+
+Lets Watson send Telegram messages to specific leaders beyond Bill —
+without opening group channels or broadcasting. Built 2026-08-30.
+Registration + generic send capability only; which recurring reports
+actually route to Telegram for a given leader is decided job-by-job,
+separately, once that leader is actually connected.
+
+**The bot is otherwise single-tenant.** Every handler in `bot/bot.py`
+guards on `_is_authorized(update)` — `update.effective_chat.id` matched
+against one hardcoded ID (Bill's, via `TELEGRAM_CHAT_ID`/`WATSON_CHAT_ID`).
+Onboarding a new person means getting their real chat_id written to
+`people.telegram_chat_id` from a `/start` message sent by *their* chat_id
+— which the gate would otherwise silently drop.
+
+- **Schema:** `people.telegram_claim_code` (nullable `TEXT`, uniqueness
+  enforced via a separate index rather than an inline `UNIQUE` — SQLite's
+  `ALTER TABLE ADD COLUMN` rejects that directly) —
+  `jobs/people/migrate_telegram_claim_code.py`. `people.telegram_chat_id`
+  already existed (populated for Bill only, otherwise unused by any code
+  path before this build) and is reused as-is.
+- **Seed a leader:** `python3 jobs/telegram/seed_claim_codes.py "Full Name"`
+  — looks up/creates the `people` row, generates an unguessable 8-char
+  `secrets`-based code, prints a deep link:
+  `https://t.me/wckyWatsonbot?start=<code>`. Not a scheduled job — run
+  manually, once per leader. Bill hand-delivers the link (text, email, in
+  person) — not automated.
+- **Claim flow (`handle_start` in `bot/bot.py`):** the claim-code check
+  runs *before*, and bypasses, the `_is_authorized` gate — the only
+  carve-out anywhere in the bot. If the `/start` payload exactly matches
+  a live `telegram_claim_code`, that row's `telegram_chat_id` is set to
+  the sender's chat_id, the code is cleared, and the bot replies
+  confirming the connection. Any other payload — empty, garbage, or one
+  of the existing `reject_`/`share_`/`email_`/`savelater_` payloads —
+  falls through unchanged to the normal gate, so a stranger sending a
+  bare `/start` still gets today's total silence, not a reply.
+- **Send helper:** `jobs/telegram/send_to_person.py` —
+  `send_to_person(person_id, message) -> bool`. Generic, one person per
+  call — no group/channel sends, no broadcast-all helper. Returns
+  `False` (and logs) if the person has no `telegram_chat_id` yet; never
+  falls back to Bill's own chat.
+
+**Status (2026-08-30):** built, migrated, and deployed
+(`watson-bot.service` restarted). Three claim codes seeded — Donna
+Redman, Jim Bouchat, Bill Crook — links generated but not yet confirmed
+delivered/claimed as of this writing. No existing report has been
+rewired to send via `send_to_person()` yet — deliberately deferred, to
+be picked job-by-job once a given leader is actually connected.
 
 ---
 
@@ -2977,3 +3029,37 @@ Bugs surfaced in Claude.ai conversation history predating the `bug_tracker` tabl
 ### ~/watson-tools
 - a02287b Fix /ham redirect loop in the hamprep rewrite
 - 638cf51 Add rewrite for wtsn.me/ham -> hamprep exam prep app
+
+---
+
+## Recent Changes — 2026-08-31
+
+### ~/watson
+- ac05a1e docs: bugs/backlog export 2026-08-31
+- 1fe7059 docs: file map 2026-08-31
+- 12813d5 docs: architecture update — recovery script current state
+- c342d86 fix: stop watson_recover.sh sweeping unrelated .service files into place
+- ecd0478 fix: install Ollama separately + add curl/zstd, found by testing steps 12-13 for real
+- 8e7d2a9 fix: install Tailscale separately, found by testing watson_recover.sh with real systemd
+- 2a077ed fix: add missing cron package, found by testing watson_recover.sh for real
+- d38d533 fix: make watson_recover.sh restore backup scope generically, not by name
+- 265a8e9 fix: guard connect-card attendance insert against duplicates
+- 9c7bb10 docs: architecture update — backup job scope
+- 9989c74 backup: add ~/.claude/projects to both OneDrive and local restic legs
+- da2c30e Add Telegram Log tab: track outbound messages now that Watson sends to more than Bill
+- 5236b68 docs: document Telegram Leader Onboarding in architecture doc
+- e6f7b7f Add Telegram leader onboarding (claim-code /start flow)
+- 4f395b0 attendance_web: add Inactive as a campus designation
+- 022e790 attendance_web: sort by last name, not first
+- 46c02f4 Add wtsn.me/cat/duplicates staff tool: duplicate-member review
+- 720a966 Add wtsn.me/cat/attendance staff tool: present/absent toggles
+- 9cdca2e docs: architecture update 2026-08-30
+
+### ~/wcky
+- 9c2bb98 fix: revert connect-card auto-redirect to Subsplash giving page
+
+### ~/watson-tools
+- 6f65db4 attendance: add Inactive campus + Edit Campus mode
+- 099353b Add cat/duplicates page: staff duplicate-member review tool
+- 8be14c5 Add cat/attendance page: staff attendance toggle tool
+- 65afe11 fix: revert connect-card auto-redirect to Subsplash giving page
