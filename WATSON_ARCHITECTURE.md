@@ -285,8 +285,6 @@ now a confirmed-closed result, not an open gap pending a retest.
 | `jobs/connect_cards/email_reports.py --bill --prayer --kaci` | Mon 5am | Next steps/comments → Bill; prayer digest → Bill; prayer requests report → Kaci |
 | `jobs/connect_cards/email_reports.py --donna` | Tue 5am | Attendance → Donna |
 | `jobs/connect_cards/attendance_intake.py` | Every 30 min | Attendance intake |
-| `jobs/connect_cards/correction_handler.py` | Every 30 min | Attendance corrections |
-| `jobs/connect_cards/campus_classifier.py` | Mon 5:45am | Classify member campus from 8-week connect card history |
 | `jobs/connect_cards/missed_report.py` | Mon 6am | Missed report — 3 sections: Wilmington, Online, Hybrid — recipients: Bill, Donna, Kaci |
 | `jobs/connect_cards/shepherding_report.py` | Wed 6am | Pastoral care digest |
 | `jobs/connect_cards/conflict_report.py` | Sun 5pm | Member conflict report with 3-button Telegram resolution |
@@ -498,17 +496,32 @@ Every prefix here also works typed directly in dashboard/Telegram chat, not just
 
 All non-active statuses excluded from: missed report, shepherding report, State of the Church members-not-seen list.
 
+`jobs/connect_cards/correction_handler.py` (30-min cron, parsed Donna/Bill
+reply emails to the missed report and auto-set `active = 0` for anyone under
+a "Non-Active" heading) was **deleted 2026-08-31** — corrections and
+inactive-marking now go through `wtsn.me/cat/attendance` (Jim) instead of
+reply-email parsing. Same day: `missed_report.py`'s footer now points
+recipients at `https://wtsn.me/cat/attendance` instead of soliciting reply
+corrections, and `jobs/email_intake.py`'s `_is_missed_report_reply()`
+deferral (which left those replies unread waiting for
+`correction_handler.py`) was removed — such replies now fall through to
+normal handling instead of sitting unread indefinitely.
+
 ### Campus Classification (`campus_preference` column)
-Values: `Wilmington`, `Online`, `Hybrid`
+Values: `Wilmington`, `Online`, `Hybrid`, `Inactive`
 
-**Classifier logic** (`jobs/connect_cards/campus_classifier.py`, runs Mon 5:45am):
-1. Count Online vs Wilmington connect cards in last 56 days
-2. Both ≥ 2 → Hybrid
-3. Either ≥ 5 (not hybrid) → that campus
-4. Middle zone → whichever is higher; Wilmington tiebreak
-5. No cards in 8 weeks → Wilmington
+**Manually managed only** — as of 2026-08-31, campus is set by Jim (or any
+staff with access) via the `wtsn.me/cat/attendance` tool
+(`jobs/congregation/attendance_web.py`, `/api/cat/attendance/campus`), and via
+manual override in the dashboard Member Management panel. There is no
+automatic classifier.
 
-Manual override available in dashboard Member Management panel.
+`jobs/connect_cards/campus_classifier.py` (Mon 5:45am cron) was **deleted
+2026-08-31** — it unconditionally overwrote `campus_preference` for every
+active member each week from 8-week connect-card counts, with no awareness
+of `Inactive` (added 2026-08-30). It silently reverted 15 members that staff
+had just marked Inactive back to `Wilmington` on its very next run. See
+`bug_tracker` id 110 in `data/watson.db`.
 
 ### Missed Report Sections
 Three sections, each suppressed if empty: WILMINGTON CAMPUS / ONLINE CAMPUS / HYBRID CAMPUS
@@ -3063,3 +3076,33 @@ Bugs surfaced in Claude.ai conversation history predating the `bug_tracker` tabl
 - 099353b Add cat/duplicates page: staff duplicate-member review tool
 - 8be14c5 Add cat/attendance page: staff attendance toggle tool
 - 65afe11 fix: revert connect-card auto-redirect to Subsplash giving page
+
+---
+
+## Recent Changes — 2026-09-01
+
+### ~/watson
+- 5a72a2d docs: bugs/backlog export 2026-09-01
+- 870cc81 docs: file map 2026-09-01
+- 59a4a93 feat(congregation): add Elder Shepherding Report (Telegram, per-deacon-group)
+- b7d3469 kb: sync 1 transcript(s) to kb/documents (same-day)
+- 4c811f0 kb: sync 1 transcript(s) to kb/documents (same-day)
+- b98c2d1 deacons_web.py: add "Inactive" as a selectable deacon bucket
+- 3a548d5 Retire watson-people: remove deacon_admin_api.py backend
+- df8bed2 feat(connect_cards): add Bill Crook to Sunday attendance reminder
+- 046842d Add wtsn.me/cat/deacons backend: unified deacon roster tool
+- 74ced40 fix(connect_cards): recover spam-quarantined cards, dedupe Bill's reports
+- 6c937a9 missed_report.py: move to Tue 7am, add Sunday attendance-link Telegram reminder
+- c00164a docs: close out the correction_handler.py removal loose end
+- c6709e1 email_intake.py: drop the missed-report-reply deferral
+- 8c04d87 missed_report.py: direct corrections to wtsn.me/cat/attendance
+- 9a93fb8 Remove correction_handler.py — Jim's attendance tool now owns corrections
+- e54ab7f Drop campus_classifier.py references from batch_update note and architecture doc
+- ebe5de2 Remove campus_classifier.py — Jim now manages campus via attendance tool
+- 272a941 docs: architecture update 2026-08-31
+
+### ~/watson-tools
+- 5def608 cat/deacons: add second subtitle sentence pointing to the Open button
+- 08cda7e cat/deacons: update header and subtitle copy
+- dfbec96 DeaconBoard.tsx: add "Inactive" as a filter and per-card deacon option
+- 76058c8 Add /cat/deacons: unified deacon roster tool
