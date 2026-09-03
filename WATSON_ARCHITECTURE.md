@@ -286,7 +286,7 @@ now a confirmed-closed result, not an open gap pending a retest.
 | `jobs/connect_cards/email_reports.py --donna` | Tue 5am | Attendance → Donna |
 | `jobs/connect_cards/attendance_intake.py` | Every 30 min | Attendance intake |
 | `jobs/connect_cards/missed_report.py` | Mon 6am | Missed report — 3 sections: Wilmington, Online, Hybrid — recipients: Bill, Donna, Kaci |
-| `jobs/connect_cards/shepherding_report.py` | Wed 6am | Pastoral care digest |
+| `jobs/congregation/shepherding_report_ready.py` | Wed 8:30am | Telegram nudge (Bill, Jim Bouchat, Bill Crook) linking to `wtsn.me/cat/shepherdingreport` — replaces `shepherding_report.py` (Wed 6am email) and `elder_shepherding_report.py` (Wed 6:15am Telegram counts), both retired 2026-09-02; their report-building functions stay in place since the wtsn.me page still imports from them |
 | `jobs/connect_cards/conflict_report.py` | Sun 5pm | Member conflict report with 3-button Telegram resolution |
 | `jobs/connect_cards/state_of_church.py` | Thu 4pm | State of the Church HTML email |
 | `jobs/email_intake.py` | Every min | Gmail polling + triage |
@@ -3165,3 +3165,33 @@ Bugs surfaced in Claude.ai conversation history predating the `bug_tracker` tabl
 - 9b5847d cat/shepherdingreport: fix Collapse all crash
 - cec1347 cat/shepherdingreport: add Expand all / Collapse all buttons
 - 679b53b Add /cat/shepherdingreport: named elder shepherding view
+
+---
+
+## Recent Changes — 2026-09-03
+
+### ~/watson
+- d5234c3 docs: bugs/backlog export 2026-09-03
+- 9fad6c8 docs: file map 2026-09-03
+- 3afff17 Telegram intent-routing fix + consolidate directive prefixes; Micah Tasks push reminders; monthly state report elders' framing overview
+- 13f9b9e Split deacon-facing notes from private pastoral follow_ups
+- c3db246 deacons_web: allow editing a member's name via the Deacon Tool
+- 2190b00 data_chat/bot: fix deacon-group lookup, empty-result fallthrough, smart quotes
+- bef79bf bot: open-ended attendance/web-traffic/contact Q&A for all onboarded leaders
+- e70fb30 Update WATSON_ARCHITECTURE.md cron table for shepherding_report_ready
+- 38b31cd Add shepherding report ready notice, retire old shepherding cron jobs
+- 16314e0 docs: architecture update 2026-09-02
+
+### ~/watson-tools
+- 020104b Show the Catalyst logo in front of the app name, shorten home-screen title
+- faa27b7 Rename tabs, swap in a lamb icon, and make the tab bar taller
+- 3f3e8e6 Add Catalyst C logo as the Deacon App favicon and home-screen icon
+- 6120a90 Rename Deacon App to Catalyst Shepherding App
+- 0651205 Add a Notes tab and swap the shepherding icon to a sheep
+- c192329 Rename deacon follow-ups to deacon notes, matching new backend table
+- b56535c Restyle Deacon App as a mobile-style bottom tab bar
+- 68d70a7 Turn Deacon App into a tabbed single-page view
+- 27acd3a Add PIN-gated Deacon App launcher at /cat/deaconapp
+- 170aebf Point micah-tasks proxy at /m/task, not /task
+- 16bcf8b Proxy wtsn.me/task to the new micah-tasks app
+- e1aae6b deacons: make first/last name editable in a person's Open view
