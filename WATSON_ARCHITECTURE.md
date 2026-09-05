@@ -1328,13 +1328,19 @@ renamed** either once set (confirmed live — a misnamed `Brevo_Api` var had to 
 re-added under the correct name, `BREVO_API_KEY_CONNECT_CARD`, rather than renamed in place).
 
 **Live tools:**
-- `cat/connect` — full copy of wcky's Catalyst connect card (`williamckyomes.com/tools/connect-card`,
-  untouched, still live there too), same direct-to-Brevo mechanism (confirmed by reading wcky's
-  actual `route.ts` and its live Vercel project's env var names — not assumed): `CONNECT_CARD_TO_BILL`,
-  `CONNECT_CARD_TO_DONNA`, `CONNECT_CARD_TO_TYLER`, `CONNECT_CARD_BCC` (set to `watson.wcky@gmail.com`,
-  the real IMAP intake mailbox — not `watson@williamckyomes.com`, which is send-only), and
-  `BREVO_API_KEY_CONNECT_CARD`, all set fresh on `watson-tools`' own Vercel project (wcky's values
-  aren't copyable — `sensitive` type). Live as of 2026-08-28.
+- `cat/connect` — full copy of wcky's Catalyst connect card, same direct-to-Brevo mechanism
+  (confirmed by reading wcky's actual `route.ts` and its live Vercel project's env var names — not
+  assumed): `CONNECT_CARD_TO_BILL`, `CONNECT_CARD_TO_DONNA`, `CONNECT_CARD_TO_TYLER`,
+  `CONNECT_CARD_BCC` (set to `watson.wcky@gmail.com`, the real IMAP intake mailbox — not
+  `watson@williamckyomes.com`, which is send-only), and `BREVO_API_KEY_CONNECT_CARD`, all set fresh
+  on `watson-tools`' own Vercel project (wcky's values aren't copyable — `sensitive` type). Live as
+  of 2026-08-28. **This is now the only copy** — wcky's `williamckyomes.com/tools/connect-card`
+  (page, form, and API route) was retired 2026-09-05; that path now permanently redirects to
+  `wtsn.me/cat/connect` via wcky's `next.config.js`. `jobs/connect_cards/intake.py`'s Gmail-based
+  ingest into `congregation.db` needed no change — it matches on sender/subject, not origin domain,
+  and both copies send identical emails. A spam-phone blocklist (`BLOCKED_PHONE_DIGITS` in
+  `route.ts`) was added to this copy the same day, after a bot repeatedly resubmitted a fake
+  visitor through the wcky form — see [[project_congregation_db_spam]].
 
 ---
 
@@ -3272,3 +3278,29 @@ Bugs surfaced in Claude.ai conversation history predating the `bug_tracker` tabl
 
 ### ~/watson-tools
 - 0f4da79 feat: rewrite /curator to Curator's own Vercel deployment
+
+---
+
+## Recent Changes — 2026-09-05
+
+### ~/watson
+- db00b06 docs: update architecture for connect-card retirement on wcky
+- 722e258 Privacy Guard: fix false-confidence gaps, add CAPTCHA-assist, notifier + observability improvements
+- 44c2e9a docs: architecture update 2026-09-05
+- 76c8872 docs: bugs/backlog export 2026-09-05
+- a8d9c4f docs: file map 2026-09-05
+- 27256e0 docs: regenerate FILE_MAP.md from live file tree (#58)
+- f4b39b7 Weekly Beelink utilization report for VPS-sizing estimate (#56)
+- 37192bf devdispatch: progress -> reporting (#55)
+- 08b08db feat(curator): merge Bill+Mel into shared Adults account, PIN-only login
+- 2b647b2 fix(curator): title-match verification for Amazon/Goodreads/Open Library
+- af892e3 fix(curator): wrong-book source pages + Open Library timeout doubling
+- 45579b3 perf: tighten worker idle-poll interval for faster search results
+
+### ~/wcky
+- fac5d37 fix: retire connect-card in favor of wtsn.me/cat/connect
+- 53b8af4 fix: block known spam phone number on connect-card intake
+- e4ba63a publish: Standing Up Before the Fix
+
+### ~/watson-tools
+- a654f6d fix: block known spam phone number on connect-card intake
