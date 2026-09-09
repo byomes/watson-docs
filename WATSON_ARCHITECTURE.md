@@ -324,7 +324,6 @@ is considered fully confirmed.
 | `jobs/connect_cards/email_reports.py --bill --prayer --kaci` | Mon 5am | Next steps/comments → Bill; prayer digest → Bill; prayer requests report → Kaci |
 | `jobs/connect_cards/email_reports.py --donna` | Tue 5am | Attendance → Donna |
 | `jobs/connect_cards/attendance_intake.py` | Every 30 min | Attendance intake |
-| `jobs/connect_cards/missed_report.py` | Mon 6am | Missed report — 3 sections: Wilmington, Online, Hybrid — recipients: Bill, Donna, Kaci |
 | `jobs/congregation/shepherding_report_ready.py` | Wed 8:30am | Telegram nudge (Bill, Jim Bouchat, Bill Crook) linking to `wtsn.me/cat/shepherdingreport` — replaces `shepherding_report.py` (Wed 6am email) and `elder_shepherding_report.py` (Wed 6:15am Telegram counts), both retired 2026-09-02; their report-building functions stay in place since the wtsn.me page still imports from them |
 | `jobs/connect_cards/conflict_report.py` | Sun 5pm | Member conflict report with 3-button Telegram resolution |
 | `jobs/connect_cards/state_of_church.py` | Thu 4pm | State of the Church HTML email |
@@ -1912,6 +1911,7 @@ Bugs surfaced in Claude.ai conversation history predating the `bug_tracker` tabl
 - ~~iOS keyboard patch in dashboard chat~~ — attempted and reverted 7 times, permanently removed from build queue
 - ~~Build Pipeline (`jobs/dev/build_pipeline.py`)~~ — Claude API spec/review/approve flow triggered by bare `build <request>` / `approve` in Telegram; last ran 2026-06-15, superseded by Dev Loop. Bot triggers removed 2026-07-03. File left in place, unreferenced.
 - ~~`jobs/kb/archive_transcripts.py`~~ — retired 2026-07-20, superseded by `jobs/kb/sync_and_index.py`. Its 30-day-old-file threshold became unreachable once transcripts started moving to `kb/documents/` the same day they arrive. File left in place, unreferenced; cron entry removed.
+- ~~`jobs/connect_cards/missed_report.py`~~ — Tue 7am email (Bill, Donna, Kaci) of who missed that Sunday; retired 2026-09-08 at Bill's request after he called it "the old attendance system" on receiving one, superseded by the live `wtsn.me/cat/attendance` tool and the Wed shepherding-report-ready Telegram nudge. Cron entry removed same day; file itself deleted (`02a8855`) after confirming no remaining code imported or called it.
 
 ---
 
@@ -3499,3 +3499,47 @@ Bugs surfaced in Claude.ai conversation history predating the `bug_tracker` tabl
 - 850b605 deaconapp: match shepherdingreport's labeled/colon-separated summary boxes
 - 800512d shepherdingreport: label the three summary boxes, add colon before count
 - 0895192 attendance: single last-name-sorted list, no Wilmington/Online split
+
+---
+
+## Recent Changes — 2026-09-09
+
+### ~/watson
+- eadf496 docs: bugs/backlog export 2026-09-09
+- 2b1882b docs: file map 2026-09-09
+- e86d7c5 Add VPS cost estimate to dashboard Dev tab
+- 39b32aa Add dark-background apple-touch-icon so iOS stops showing a white box
+- b2471f3 Add apple-touch-icon link to dashboard so iOS Add to Home Screen picks up the current icon
+- 5ac7aa9 Extend Telegram deacon-assignment to Dr. Bill's own chat
+- 5aa9489 Add Telegram deacon-assignment for Bill Crook and Jim Bouchat only
+- 4585705 Add weekly fast-path suggestion review with Telegram approve/reject
+- 49e1bf6 Add live Telegram alert whenever Watson calls Claude for help
+- a15bd65 Expand LLM-free fast-path phrase coverage for Team Chat questions
+- adc2e45 Add triggering message to API Spending log
+- addbd1d Fix dashboard timestamps rendering as UTC instead of local time
+- f00e653 Fix API Spending attribution: default to Bill, resolve real Curator accounts
+- e3cab4c Add per-person attribution to API Spending dashboard table
+- 97d7243 Replace blanket zone-arrival alerts with opt-in location reminders
+- a539485 Show defined zones on the location map
+- 80e6988 Add server-side geofencing to location tracking
+- 7757b53 Add deacon note edit/delete API routes
+- eb6cc28 Dashboard: share notes to deacon_notes, remove Chat tab, working Add Reminder
+- 70ca7dc Widen deacon/leader Q&A to all of congregation.db except leadership-only content
+- 9bfba50 Scope birthday_report's upcoming-birthdays section to each deacon's group too
+- 49274af Scope birthday_report's missing-birthdate list to each deacon's own group
+- 23f44be Add monthly birthday digest for Bill Crook and Jim Bouchat
+- 6083f25 Fix data_chat generating wrong SQL for partner/deacon-gap questions
+- 114d148 Fix UnboundLocalError crashing all leader/team-chat messages
+- 5e3139f docs: missed_report.py was deleted, not just unreferenced
+- 02a8855 remove: delete retired missed_report.py
+- 2da64f9 docs: retire missed_report.py cron entry
+- 3074151 fix: harden Privacy Guard warm-up URL builder against unsupported patterns
+- 0cb8e65 fix: Privacy Guard scan warms BeenVerified session before state-filtered fetch
+- 1fd42aa docs: architecture update 2026-09-08
+
+### ~/watson-tools
+- 7937940 Deacon App: match Delete button color to Edit on note cards
+- 8d04d59 Deacon App: drop name from the header Log out button
+- 4712145 Add edit/delete to deacon notes in the Shepherding App
+- 3ae4015 Add Watson (Telegram) shortcut to Deacon App bottom nav
+- a3830b6 Fix: deacon app PIN pad ignored keyboard input on desktop
