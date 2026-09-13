@@ -198,7 +198,7 @@ Watson acts on Dr. Bill's behalf under his supervision. Always identified openly
 
 ### congregation.db Key Tables
 
-- `members` — includes `member_status` (active/deceased/disconnected/non_local/snowbird), `campus_preference` (Wilmington/Online/Hybrid), `shepherding_exempt`
+- `members` — includes `member_status` (active/deceased/disconnected/non_local/snowbird), `campus_preference` (Wilmington/Online/Hybrid), `shepherding_exempt`, `household_id`/`household_role` (family relationships — see Family Relationships below)
 - `attendance`, `connect_cards`, `next_steps`, `prayer_requests`, `follow_ups`
 - `member_conflicts` — Sunday 5pm Telegram conflict report with 3-button resolution
 
@@ -562,6 +562,51 @@ Three sections, each suppressed if empty: WILMINGTON CAMPUS / ONLINE CAMPUS / HY
 ### Conflict Resolution
 Sunday 5pm Telegram report with 3-button resolution: Keep Old / Keep New / Skip
 Dashboard trigger available: "Run Conflict Check" in More tab.
+
+### Family Relationships (`household_id` / `household_role`)
+Added 2026-09-12 after Pastor Tyler asked Watson "who is so-and-so's wife"
+and there was no way to answer it. `household_id` (e.g. `H047`) already
+grouped a family together (added earlier for the deacon-directory import,
+used by `jobs/congregation/family_edit.py::add_child`), but nothing said
+WHO within that group was the spouse vs. a child vs. the head — matching on
+shared household_id or last name alone can't tell a spouse from a sibling
+or a parent from a child. `household_role` is one of `head`, `spouse`,
+`child`, `other` (adult relative/roommate), or `NULL` if never recorded.
+
+- **Write path (Telegram, `jobs/congregation/family_edit.py`):** `mark_spouse()`
+  and `mark_child()`, for two members ALREADY on file (use the existing
+  `add_child()` instead for a brand-new member). Per Bill's 2026-09-12
+  follow-up ("I want all leaders to be able to help manage families"),
+  these are open to EVERY onboarded leader (team member or deacon) in
+  Telegram team chat — deliberately NOT gated by `_FAMILY_EDIT_ALLOWLIST`
+  the way `add_child`/birthday-update still are (that narrower gate was a
+  separate, earlier decision and stays unchanged). Recognized phrasings:
+  - "X and Y are married" / "X and Y are spouses" / "X is married to Y" / "X's spouse is Y"
+  - "X is a child of Y" / "X is Y's child" / "X's child is Y"
+  - If the two people are in different, already-populated households, this
+    refuses to auto-merge (asks for a manual fix via dashboard Member
+    Management first) rather than risk scrambling either family's data.
+- **Write path (deacon app, `wtsn.me/cat/deaconapp`):** same 2026-09-12
+  request — every logged-in deacon can manage family relationships from a
+  person's card in the List tab (`DeaconBoard.tsx`'s `FamilySection`,
+  typeahead `PersonPicker` over the full roster). Backed by
+  `jobs/congregation/deacons_web.py`'s `POST /api/cat/deacons/family/spouse`
+  and `/family/child`, which call `family_edit.py`'s `mark_spouse_by_id`/
+  `mark_child_by_id` — id-based (the app already has both members' ids from
+  its loaded roster, so none of the Telegram path's fuzzy name-matching or
+  ambiguity handling is needed). Same household-merge refusal as above.
+- **Read path (`jobs/analytics/data_chat.py`):** `household_id`/`household_role`
+  are queryable columns on `members` (not gated behind `allow_contact_info`
+  — they carry no address/phone/email of their own). The system prompt
+  teaches the model a self-join pattern: match X by name on one side, match
+  the relationship role on the other (`household_role IN ('head','spouse')`
+  for a spouse, `= 'child'` for a child, and `household_role = 'child'`
+  on X's own side + `IN ('head','spouse')` on the other for X's parents).
+- Existing households imported before 2026-09-12 have `household_role = NULL`
+  until a leader (or Bill) tells Watson the relationship via one of the
+  phrasings above — there was no reliable way to auto-backfill roles from
+  the existing data (a 2-adult household isn't necessarily a married
+  couple), so this fills in over time rather than being guessed at bulk.
 
 ---
 
@@ -1586,6 +1631,13 @@ substring (e.g. "Venuto" contains "to") and silently pick the wrong contact. Fix
 channel-agnostic. Any new caller resolving a recipient/contact string should check for
 self-aliases through this same function rather than reinventing the check, or the same
 failure mode reappears.
+
+**Family fields** (added 2026-09-12): `jobs/people/lookup.py::lookup_member_family(query)` is
+the congregation.db-only counterpart used for `deacon`/`spouse`/`children`/`parent` --
+`lookup_member_details` doesn't select those columns. Backs `bot.py`'s `_extract_team_lookup`
+fast paths ("who is X's deacon", "who is X's spouse", etc. -- see that function's own comments
+for the full phrasing list) via the household_id/household_role self-join described under
+Family Relationships (Congregation Management, above).
 
 ---
 
@@ -3615,6 +3667,10 @@ Bugs surfaced in Claude.ai conversation history predating the `bug_tracker` tabl
 ## Recent Changes — 2026-09-12
 
 ### ~/watson
+- eb2319e Widen fast-path phrasing across team chat for leader usability (new who's-X's-deacon/spouse/children/parent lookups, fixed 2 dead cdb_query.py triggers, many more phrasing synonyms)
+- 5b93b5a fix: "how old is X" now answers with computed age, not raw birthdate
+- 8c22270 Open family relationship management to all leaders (chat + deacon app)
+- 270a80d Add family relationship tracking (spouse/child) to congregation.db
 - 77ca101 docs: bugs/backlog export 2026-09-12
 - 045d8cb docs: file map 2026-09-12
 - 84ca59f Cap the pending-clarification cache with oldest-first eviction
@@ -3636,3 +3692,59 @@ Bugs surfaced in Claude.ai conversation history predating the `bug_tracker` tabl
 - 15360dd fix(trading): real position sizing for ma_crossover/mean_reversion/momentum
 - 0544505 Add "does [name] have a deacon" fast-path phrase to looking up a specific member
 - 9efadbd docs: architecture update 2026-09-11
+
+---
+
+## Recent Changes — 2026-09-13
+
+### ~/watson
+- 53bc36d kb: sync 1 transcript(s) to kb/documents (same-day)
+- 7953ec3 docs: bugs/backlog export 2026-09-13
+- 212e467 kb: sync 1 transcript(s) to kb/documents (same-day)
+- be8e112 docs: file map 2026-09-13
+- 69432f4 kb: sync 1 transcript(s) to kb/documents (same-day)
+- 7dd8b2e kb: sync 1 transcript(s) to kb/documents (same-day)
+- 9e1dacd kb: sync 1 transcript(s) to kb/documents (same-day)
+- ee57bba kb: sync 1 transcript(s) to kb/documents (same-day)
+- 0263c68 kb: sync 1 transcript(s) to kb/documents (same-day)
+- b1d713e kb: sync 1 transcript(s) to kb/documents (same-day)
+- 8723191 kb: sync 1 transcript(s) to kb/documents (same-day)
+- 7d879f0 kb: sync 1 transcript(s) to kb/documents (same-day)
+- 5db7110 kb: sync 1 transcript(s) to kb/documents (same-day)
+- c98f285 kb: sync 1 transcript(s) to kb/documents (same-day)
+- 217c652 kb: sync 1 transcript(s) to kb/documents (same-day)
+- a0a50b0 kb: sync 1 transcript(s) to kb/documents (same-day)
+- 3546fbb kb: sync 1 transcript(s) to kb/documents (same-day)
+- 4bbf935 kb: sync 1 transcript(s) to kb/documents (same-day)
+- 8d6659c kb: sync 1 transcript(s) to kb/documents (same-day)
+- 9ad05f5 kb: sync 1 transcript(s) to kb/documents (same-day)
+- aded8f5 kb: sync 1 transcript(s) to kb/documents (same-day)
+- 64b4bed kb: sync 1 transcript(s) to kb/documents (same-day)
+- 56a4e8c kb: sync 1 transcript(s) to kb/documents (same-day)
+- 83c9f50 kb: sync 1 transcript(s) to kb/documents (same-day)
+- 7d27730 kb: sync 1 transcript(s) to kb/documents (same-day)
+- dcf366b kb: sync 1 transcript(s) to kb/documents (same-day)
+- bcf0a66 kb: sync 1 transcript(s) to kb/documents (same-day)
+- 0d6fe11 kb: sync 1 transcript(s) to kb/documents (same-day)
+- dbc2e9b kb: sync 1 transcript(s) to kb/documents (same-day)
+- 03adf48 kb: sync 1 transcript(s) to kb/documents (same-day)
+- 21f0402 kb: sync 1 transcript(s) to kb/documents (same-day)
+- d86fa4d kb: sync 1 transcript(s) to kb/documents (same-day)
+- fe91476 kb: sync 1 transcript(s) to kb/documents (same-day)
+- 2e67154 docs: log fast-path phrasing review + document lookup_member_family
+- eb2319e Widen fast-path phrasing across team chat for leader usability
+- a1bc07c docs: log age-formatting fix in Recent Changes
+- 5b93b5a fix: "how old is X" now answers with computed age, not raw birthdate
+- c10ca4b docs: document widened family-management access (chat + deacon app)
+- 8c22270 Open family relationship management to all leaders (chat + deacon app)
+- 5a51b90 docs: log household_role commit in Recent Changes
+- 270a80d Add family relationship tracking (spouse/child) to congregation.db
+- eb788d9 Add "what is [name] birthday" fast-path phrase to looking up a specific member
+- f9c41f1 Add "who is [name] married to" fast-path phrase to looking up a specific member
+- 509d91e docs: architecture update 2026-09-12
+
+### ~/wcky
+- c3a9f90 publish: Partners, Not Spectators
+
+### ~/watson-tools
+- 66ed373 Add family relationship management to the deacon app
