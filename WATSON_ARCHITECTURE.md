@@ -118,6 +118,30 @@ Watson acts on Dr. Bill's behalf under his supervision. Always identified openly
   the underlying constraint. `qwen2.5:14b` stays off every Beelink job,
   now for a confirmed reason rather than an untested one.
 
+### FMSPC Watson Twin — manual-only, NOT the automated exclusion above
+
+Added 2026-09-28: `scripts/fmspc_watson_twin.py` (reference copy; runs live
+from `C:\Users\billy\watson_twin\watson_twin.py` on FMSPC, not auto-synced
+from this repo — same convention as the hand-extracted sermon pipeline files
+noted in `CLAUDE.md`) is a terminal chat agent that runs on FMSPC's own local
+Ollama (`llama3.1:8b` default — 103 tok/s, reliable tool-calling; `qwen2.5:14b`
+available for slower/deeper reasoning at ~5 tok/s; `qwen2.5:32b` was
+benchmarked and rejected — 1.5 tok/s on FMSPC's 8GB VRAM, unusable
+interactively; `qwen2.5-coder:7b` also rejected — fast but doesn't reliably
+emit real tool calls, returns them as plain text instead) and executes shell
+commands on the Beelink over a dedicated SSH keypair (`fmspc_beelink` on
+FMSPC, `id_ed25519_fmspc` on the Beelink; `Host watson` / `Host fmspc`
+aliases respectively) with full read/write/exec access on the Beelink —
+deliberately broader than the Telegram bot's guardrailed intent surface, a
+middle ground Bill asked for between the Telegram bot and full Claude Code.
+
+**This does not reopen the automated-job-loop exclusion above.** It only
+acts when Bill starts it by hand at the FMSPC console (`python
+watson_twin.py`) and only while FMSPC is on and he's sitting at it — no
+cron, Telegram trigger, or dashboard trigger calls this, and it must never be
+wired into one. Every command it runs on the Beelink is logged to
+`watson_twin_audit.log` next to the script (FMSPC-local, not synced here).
+
 ### PBLaptop — Windows Laptop
 
 - Secondary machine. OneDrive synced. No Ollama.
@@ -1921,6 +1945,8 @@ VERCEL_API_TOKEN=
 | Sermon audio (FMSPC) | `E:\0 - Sermon Audio\incoming` |
 | Dev Loop projects | `~/watson/dev/<slug>/` |
 | Commands launcher | `~/watson/memory/commands.json` |
+| Portable JDK (Appium/UiAutomator2) | `~/jdk` (Temurin 17, no system JDK/sudo used) |
+| Android SDK stub (Appium ANDROID_HOME) | `~/Android/Sdk` (`platform-tools` is a symlink to the pre-existing `~/platform-tools`, not a real SDK) |
 
 ---
 
@@ -4521,3 +4547,54 @@ Bugs surfaced in Claude.ai conversation history predating the `bug_tracker` tabl
 - fa4085c Add First Visit date-range filter to Catalyst DB
 - 0fe95f0 Add "+ Add Person" to each team on the Sunday serving check-off page
 - a36983e Add Serving Teams section to Catalyst DB member profile
+
+---
+
+## Recent Changes — 2026-09-29
+
+### ~/watson
+- 0d58515 docs: bugs/backlog export 2026-09-29
+- 79e6966 docs: file map 2026-09-29
+- 7bec4e9 Add Appium/UiAutomator2 capability for SMS gateway phone touch automation
+- fd8c14a Add per-member last-8-week attendance endpoint for deaconapp Report tab
+- e0051c2 Add duplicate-registration check to event signups, mirroring the connect-card checker
+- 93b8e86 Notify Donna about connect-card birthday/anniversary conflicts
+- 57462e2 Auto-compute disconnected in catalystdb's Connected ladder
+- 338f021 Split Critical into Critical (4-8 wks) and Disconnected (9+ wks)
+- 26820e6 Add days-to-2nd-visit stat to the guest conversion report
+- 4cb9787 Track second_visit_date separately from first_visit_date
+- a1c9fea Add GET /api/sms/attention for the SMS app's At Risk/Critical panel
+- bebb939 kb: sync 1 transcript(s) to kb/documents (same-day)
+- 014da14 fix: point immediate KB sync trigger at the Funnel, not raw port 5200
+- f90461a Add weekly Telegram prayer-request notifications to Jim Bouchat
+- 4198b10 Fix group replies delivering as individual texts, not a group
+- c25b643 Add group-text compose and rename support
+- 0592fee Fix group-thread raw phone leak in message search results
+- 7f87b97 Fix group texts splintering in Watson SMS
+- 765c716 Add anniversary alert and route minors' birthday SMS to parents
+- 33b6ac4 docs: add FMSPC Watson Twin reference copy + architecture note
+- d737f70 Add home-LAN fallback for SMS gateway when Tailscale drops
+- ca7bb35 Debounce SMS gateway heartbeat alerts
+- a2c4d8b Add "how many people have come to church in the past 8 weeks" fast-path phrase to attendance trend over time
+- 789c4a8 docs: architecture update 2026-09-28
+
+### ~/watson-tools
+- 8e8bac7 Extend attendance popup to Connected/Consistency stat-box name lists
+- 6092d64 Add per-person attendance popup to deaconapp Report tab
+- 20824a2 Add /cat/deaconapp-bill: personal deacon app copy with SMS-webapp text links
+- 22757a1 Add /cat/event-duplicates review board, mirroring /cat/duplicates
+- e5ad80b Cap connect-card birthday/anniversary date pickers at today
+- a9a9329 Make deactivated count a direct link to the deactivated-only view
+- de72c8c Hide Delete Permanently button in catalystdb bulk bar until deactivated
+- aab3bdf Hide deactivated members by default in catalystdb grid, add hard delete
+- 63ba3d1 Match Consistency colors to Connected's ramp
+- 92cd891 Recolor Connected/Consistency ramps, add contact icons, reorder catalystdb Connected filter
+- c35b2c6 Move Disconnected box to the right of Critical
+- b8b9e32 Split Critical into Critical (4-8 wks) and Disconnected (9+ wks)
+- 112d43b Add Second Visit column to catalystdb admin board
+- 266eb9f Add At Risk / Critical panel to SMS app gear menu
+- f6fdffd fix(sms): stack name/phone inputs for extra group recipients
+- bff4650 Wire contact-search autocomplete into group text "add another person" rows
+- 2649a40 Add multi-recipient compose and group-rename UI
+- 8b78928 Add group-text support to SMS app: thread display, sender labels
+- bd58431 Surface today's birthdays at the top of the SMS thread list
